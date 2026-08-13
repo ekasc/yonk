@@ -1,52 +1,102 @@
 # Yonk
 
-Yonk is a general-purpose remote compute fabric. The repository currently implements the remote job protocol and workspace-transfer foundation: the client packages its current working tree, uploads it to a temporary worker directory, and streams execution events back. The temporary executor still permits only `echo`.
+Yonk lets one machine run work using another machine's CPU and RAM.
 
-```text
-CLI → protocol client → HTTP/NDJSON → worker → restricted executor
+```bash
+yonk run debian -- pnpm test
 ```
 
-The network is represented only by an endpoint. Yonk has no Tailscale-specific code; a Tailscale hostname or IP is simply one possible endpoint.
+The command starts on your machine, runs on the selected worker, and returns its output and exit code. Yonk sends the current working tree, including uncommitted changes, so remote execution does not require a commit, push, or clean Git state.
 
-## Security status
+Yonk is built as a general compute layer. A person at a terminal, a CI job, an application, or an agent should all be able to submit the same kind of job through the same protocol.
 
-> **Do not expose this milestone daemon to untrusted clients.**
+## Status
 
-The temporary `restricted-host-process` executor runs `/bin/echo` directly on the worker host without a shell. It rejects every other command. This deliberately narrow executor exists only to prove protocol flow. It is **not a sandbox** and will be removed when the Firecracker executor lands.
+Yonk is under active development. The client/server protocol and workspace transfer are working. The current worker executor is deliberately restricted to `echo` while Firecracker isolation is being built.
 
-`yonkd` binds to `127.0.0.1:9665` by default and has no application-layer authentication yet. Bind it to a remote interface only on a network whose peers you trust and whose access controls you have configured. The eventual general-command executor must use Firecracker/KVM and provider-controlled resource limits; broad host execution will not be added.
+| Capability | Status |
+| --- | --- |
+| Worker discovery and capabilities | Working |
+| Versioned, platform-aware jobs | Working |
+| stdout and stderr streaming | Working |
+| Remote exit codes | Working |
+| Current working tree transfer | Working |
+| Configurable workspace exclusions | Working |
+| Temporary workspace cleanup | Working |
+| Firecracker/KVM isolation | Planned next |
+| CPU, memory, disk, and process limits | Planned |
+| General Linux commands | Blocked on isolation |
+| Artifacts | Planned |
+
+Do not expose the current daemon to untrusted clients. It does not have application-level authentication yet, and the restricted executor is not a security boundary.
+
+## How it works
+
+```text
+CLI
+ |
+ v
+Client
+ |
+ v
+Job protocol
+ |
+ v
+HTTP transport
+ |
+ v
+Worker
+ |
+ v
+Executor
+ |
+ v
+Sandbox / VM
+```
+
+Each layer has a narrow responsibility. The job model does not contain Tailscale or Firecracker fields. Tailscale is currently one convenient way to reach a worker; any reachable endpoint can carry the protocol. Firecracker is an executor detail and can be replaced without changing how clients describe jobs.
+
+A run currently follows this path:
+
+1. `yonk` reads the selected worker's capabilities.
+2. It packages the current directory as a gzip-compressed tar archive.
+3. It uploads the job and workspace to `yonkd`.
+4. The worker validates and extracts the archive into a temporary job directory.
+5. The executor runs with that directory as its working directory.
+6. stdout, stderr, status changes, and the result stream back to the client.
+7. The worker removes the job directory before reporting completion.
 
 ## Build
 
-Go 1.23 or newer is required.
+Yonk requires Go 1.23 or newer.
 
 ```bash
-go build ./cmd/yonk
-go build ./cmd/yonkd
+go build -o bin/yonk ./cmd/yonk
+go build -o bin/yonkd ./cmd/yonkd
 ```
 
-Cross-compile from macOS for the initial machines:
+Cross-compile the client for an Apple Silicon Mac and the daemon for Debian amd64:
 
 ```bash
 GOOS=darwin GOARCH=arm64 go build -o bin/yonk ./cmd/yonk
-GOOS=linux GOARCH=amd64 go build -o bin/yonkd ./cmd/yonkd
+GOOS=linux GOARCH=amd64 go build -o bin/yonkd-linux-amd64 ./cmd/yonkd
 ```
 
-## Run the current milestone
+## Run
 
-On Debian, choose an address reachable from the Mac (for example, the machine's Tailscale IP):
+Start the daemon on the worker. Use an address reachable from the client, such as the worker's Tailscale IP:
 
 ```bash
 ./yonkd --name debian --listen 100.x.y.z:9665
 ```
 
-On the Mac, a Tailscale MagicDNS hostname works as a normal endpoint:
+Then run a job from the Mac:
 
 ```bash
 ./yonk run debian -- echo "hello from yonk"
 ```
 
-Or specify an address/URL explicitly:
+You can also use an IP address or URL:
 
 ```bash
 ./yonk run 100.x.y.z:9665 -- echo "hello from yonk"
@@ -62,51 +112,98 @@ hello from yonk
 exit: 0
 ```
 
-Any command other than the exact command name `echo` is rejected by the worker.
+The daemon listens on `127.0.0.1:9665` by default. Pass `--listen` to accept remote connections.
 
-The current directory is archived with `tar` and gzip, including uncommitted files. These path components are excluded by default wherever they occur:
+## Workspace transfer
+
+Yonk transfers the current working tree, including uncommitted and untracked files. These path components are excluded by default:
 
 ```text
-.git  node_modules  dist  build  .next  coverage
+.git
+node_modules
+dist
+build
+.next
+coverage
 ```
 
-Add exclusions before the command separator:
+Add exclusions before `--`:
 
 ```bash
-./yonk run debian --exclude vendor --exclude tmp -- echo "hello from yonk"
+./yonk run debian \
+  --exclude vendor \
+  --exclude tmp \
+  -- echo "hello from yonk"
 ```
 
-The worker validates archive paths, links, file types, expanded size, compressed size, and file count. It removes the temporary job directory before sending the completion event.
+The worker rejects absolute paths, path traversal, unsafe symlinks, duplicate paths, special files, oversized archives, and excessive file counts during extraction.
 
 ## Protocol
 
-Yonk uses standard HTTP with typed JSON messages and newline-delimited JSON event streaming:
+The current transport uses HTTP, typed JSON messages, multipart workspace uploads, and newline-delimited JSON event streams.
 
-- `GET /v1/worker` — worker identity, resources, platform, and executors
-- `POST /v1/jobs:run` — upload job JSON plus a `tar.gz` workspace as multipart data, then stream status, stdout, stderr, failure, and completion events
-- `POST /v1/jobs/{id}:cancel` — cancel a running job
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/worker` | Return worker identity, resources, platforms, and executors |
+| `POST /v1/jobs:run` | Upload a job and workspace, then stream events and the result |
+| `POST /v1/jobs/{id}:cancel` | Cancel a running job |
 
-The request context provides cancellation if the client disconnects. Jobs are explicitly versioned and platform-aware; portable job fields contain no Firecracker, KVM, or Tailscale details.
+Jobs specify the required platform and resources rather than a sandbox implementation:
 
-## Current boundaries
+```json
+{
+  "version": 1,
+  "id": "job_01...",
+  "command": "pnpm",
+  "args": ["test"],
+  "cwd": ".",
+  "platform": {
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "resources": {
+    "cpu": 4,
+    "memory_mb": 4096,
+    "disk_mb": 8192
+  },
+  "timeout_seconds": 300,
+  "artifacts": []
+}
+```
 
-- `cmd/yonk` — CLI
-- `internal/client` — protocol client and endpoint handling
-- `internal/job` — portable protocol model
-- `internal/worker` — HTTP worker service and event stream
-- `internal/executor` — replaceable executor boundary and restricted milestone implementation
-- `internal/workspace` — workspace packaging, exclusions, bounded extraction, and archive safety
-- `cmd/yonkd` — daemon lifecycle and host capability collection
+The initial production executor will support `linux/amd64` through Firecracker and KVM. The protocol can represent other platforms without assuming how a worker provides them.
 
-## Next milestones
+## Security model
 
-1. Replace the restricted executor with an ephemeral Firecracker/KVM executor and place the uploaded workspace inside the guest.
-2. Enforce CPU, memory, disk, process, network, and runtime limits outside the guest; add hostile-workload tests.
-3. Run a real Linux development workload and return richer telemetry/artifacts.
+Submitted workloads must be treated as malicious. Yonk will not enable general command execution on the host.
 
-Firecracker, general commands, artifact handling, and resource isolation are intentionally not implemented yet.
+The Firecracker executor will put every job in a fresh microVM. The worker will control CPU, memory, disk, process count, runtime, and network access from outside the guest. It will stop the VM and remove all job state after every run.
 
-## Test
+The current `restricted-host-process` executor runs only `/bin/echo`, without a shell. It exists to support protocol and workspace development until the microVM executor replaces it.
+
+Protecting a workload from a worker is a separate problem. Confidential computing and remote attestation belong later in the roadmap and are not part of the initial system.
+
+## Repository layout
+
+```text
+cmd/yonk/          client CLI
+cmd/yonkd/         worker daemon
+internal/client/   worker protocol client
+internal/job/      portable job and event models
+internal/worker/   HTTP server and job lifecycle
+internal/executor/ executor boundary and current restricted executor
+internal/workspace workspace packaging and safe extraction
+```
+
+## Roadmap
+
+The immediate priority is Firecracker execution. General commands stay disabled until jobs run inside a microVM with host-enforced limits.
+
+See [ROADMAP.md](ROADMAP.md) for the full plan and acceptance criteria.
+
+## Development
+
+Run the test suite and static checks:
 
 ```bash
 go test -race ./...
