@@ -1,0 +1,7 @@
+/bin/
+/yonk
+/yonkd
+/.pi/
+.pi-skill-cache/
+*.test
+coverage.out
