@@ -66,15 +66,6 @@ func TestParseRunArgs(t *testing.T) {
 	}
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

@@ -56,6 +56,11 @@ chroot "$STAGING" apt-get install -y --no-install-recommends \
 # version compatible with the Debian Node.js release.
 chroot "$STAGING" npm install -g pnpm@9 >/dev/null
 
+# The guest agent bind-mounts a per-job resolver over /etc/resolv.conf at
+# runtime; bake a placeholder as the mount target instead of the worker's
+# resolver (which may be a broken local stub or leak internal DNS).
+printf 'nameserver 1.1.1.1\n' > "$STAGING/etc/resolv.conf"
+
 echo "==> installing yonk-guest"
 install -m 0755 "$GUEST_BIN" "$STAGING/usr/sbin/yonk-guest"
 mkdir -p "$STAGING/workspace" # the read-only rootfs mounts the writable job disk here

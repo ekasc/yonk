@@ -35,6 +35,27 @@ type Serial struct {
 	SerialOutPath string `json:"serial_out_path"`
 }
 
+// NetworkInterface attaches a virtio-net device to the guest.
+type NetworkInterface struct {
+	IfaceID       string       `json:"iface_id"`
+	HostDevName   string       `json:"host_dev_name"`
+	GuestMAC      string       `json:"guest_mac,omitempty"`
+	RxRateLimiter *RateLimiter `json:"rx_rate_limiter,omitempty"`
+	TxRateLimiter *RateLimiter `json:"tx_rate_limiter,omitempty"`
+}
+
+// RateLimiter is a Firecracker token-bucket pair for one direction.
+type RateLimiter struct {
+	Bandwidth *TokenBucket `json:"bandwidth,omitempty"`
+	Ops       *TokenBucket `json:"ops,omitempty"`
+}
+
+// TokenBucket limits bytes or packets to size per refill_time milliseconds.
+type TokenBucket struct {
+	Size       uint64 `json:"size"`
+	RefillTime uint64 `json:"refill_time"`
+}
+
 // WriteConfig was removed in favor of the API socket: Firecracker's config
 // file schema skips the serial device, so the executor boots VMs over the
 // API (see ApiClient).

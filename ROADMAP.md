@@ -149,9 +149,37 @@ Acceptance criteria: all met.
 - the local process exits with the remote command's code
 - telemetry is present for successful and failed commands
 
-Note: jobs have no network access. `pnpm install` and module downloads require the next phase, which enables and explicitly controls guest networking.
+## Phase 6: controlled job networking
 
-## Phase 6: artifacts and operational hardening
+Status: complete
+
+Jobs can opt into controlled internet egress, validated on the Debian 13 amd64 / KVM worker over Tailscale.
+
+Delivered and verified on real hardware:
+
+- portable `network` job field (`none` default | `egress`), negotiated via `WorkerInfo.NetworkModes`; older workers fail with a clear "field not supported" error
+- per-job TAP device from a dedicated `/30` pool (10.255.0.0/16) with deterministic names and guest MACs
+- one shared nftables `inet yonk` table: `iifname "yk*"` drop at INPUT (jobs cannot reach the worker's SSH, yonkd, or other host services) and drop of RFC1918/CGNAT/link-local/reserved plus IPv6 at FORWARD (jobs cannot reach the provider LAN or tailnet), masquerade for public egress
+- guest configured by the kernel `ip=` boot parameter (no iproute2 needed); agent bind-mounts a per-job resolver over `/etc/resolv.conf` on the read-only rootfs
+- worker-controlled rate limits via Firecracker token buckets (`--max-egress-mbps`, `--max-egress-pps`), never client-controlled
+- `--network egress` CLI flag
+
+Verified on real hardware:
+
+- `curl https://ifconfig.me` inside a job returns the worker's public IP
+- `pnpm install` (real registry) and `pnpm test` run inside the guest with the transferred workspace
+- the worker's own `yonkd:9665` and another tailnet machine are unreachable from inside a job
+- concurrent egress jobs get isolated taps and subnets, all cleaned up after every job
+- jobs without `--network` have no network device at all
+
+Acceptance criteria: all met.
+
+- jobs reach public destinations only
+- jobs cannot reach the provider LAN, the tailnet, or the worker host's services
+- per-job isolation between concurrent jobs
+- no-network stays the default; rate limits are worker-controlled
+
+## Phase 7: artifacts and operational hardening
 
 Status: planned
 
