@@ -123,7 +123,11 @@ func newTestFirecracker(t *testing.T) *Firecracker {
 		mkfs: func(root, image string, _ int64) error {
 			return os.WriteFile(image, []byte("fake-ext4"), 0o600)
 		},
-		running: map[string]context.CancelFunc{},
+		// The lifecycle tests run against the fake Firecracker and must not
+		// require root: cgroup creation is stubbed out (the production
+		// executor uses the real factory).
+		newCgroup: func(string, int, int) (*jobCgroup, error) { return &jobCgroup{}, nil },
+		running:   map[string]context.CancelFunc{},
 	}
 }
 
