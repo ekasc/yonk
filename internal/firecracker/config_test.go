@@ -2,42 +2,57 @@ package firecracker
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
-func TestWriteConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	cfg := Config{
-		BootSource: BootSource{
-			KernelImagePath: "/opt/yonk/vmlinux.bin",
-			InitrdPath:      "/tmp/job/initramfs.cpio",
-			BootArgs:        "console=ttyS0 reboot=k panic=1 pci=off",
+// The API request bodies use Firecracker's exact field names.
+func TestRequestBodyJSON(t *testing.T) {
+	bodies := []struct {
+		name string
+		body any
+		want map[string]any
+	}{
+		{
+			name: "boot-source",
+			body: BootSource{KernelImagePath: "/k", InitrdPath: "/i", BootArgs: "console=ttyS0"},
+			want: map[string]any{"kernel_image_path": "/k", "initrd_path": "/i", "boot_args": "console=ttyS0"},
 		},
-		Drives: []Drive{{
-			DriveID:      "workspace",
-			PathOnHost:   "/tmp/job/workspace.ext4",
-			IsRootDevice: false,
-			IsReadOnly:   false,
-		}},
-		MachineConfig: MachineConfig{VCPUCount: 2, MemSizeMiB: 1024, SMT: false},
-		VSock:         VSock{GuestCID: 3, UDSPath: "/tmp/job/v.sock"},
+		{
+			name: "machine-config",
+			body: MachineConfig{VCPUCount: 2, MemSizeMiB: 1024, SMT: false},
+			want: map[string]any{"vcpu_count": float64(2), "mem_size_mib": float64(1024), "smt": false},
+		},
+		{
+			name: "vsock",
+			body: VSock{GuestCID: 3, UDSPath: "/tmp/v"},
+			want: map[string]any{"guest_cid": float64(3), "uds_path": "/tmp/v"},
+		},
+		{
+			name: "drive",
+			body: Drive{DriveID: "workspace", PathOnHost: "/tmp/w", IsRootDevice: false, IsReadOnly: false},
+			want: map[string]any{"drive_id": "workspace", "path_on_host": "/tmp/w", "is_root_device": false, "is_read_only": false},
+		},
+		{
+			name: "serial",
+			body: Serial{SerialOutPath: "/tmp/console.log"},
+			want: map[string]any{"serial_out_path": "/tmp/console.log"},
+		},
 	}
-	if err := WriteConfig(path, cfg); err != nil {
-		t.Fatalf("WriteConfig() error = %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("config is not valid JSON: %v", err)
-	}
-	for _, key := range []string{"boot-source", "drives", "machine-config", "vsock"} {
-		if _, ok := decoded[key]; !ok {
-			t.Fatalf("config missing key %q", key)
-		}
+	for _, test := range bodies {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(test.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range test.want {
+				if got[key] != want {
+					t.Fatalf("%s = %v, want %v", key, got[key], want)
+				}
+			}
+		})
 	}
 }
