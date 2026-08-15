@@ -47,10 +47,11 @@ type FirecrackerConfig struct {
 
 // Firecracker executes each job inside an ephemeral Firecracker microVM.
 type Firecracker struct {
-	cfg    FirecrackerConfig
-	logger *slog.Logger
-	mkfs   func(root, image string, sizeBytes int64) error
-	net    *jobNetwork
+	cfg       FirecrackerConfig
+	logger    *slog.Logger
+	mkfs      func(root, image string, sizeBytes int64) error
+	newCgroup func(jobID string, vcpu, memoryMB int) (*jobCgroup, error)
+	net       *jobNetwork
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
@@ -71,10 +72,11 @@ func NewFirecracker(cfg FirecrackerConfig, logger *slog.Logger) (*Firecracker, e
 		cfg.MaxMemoryMB = 4096
 	}
 	f := &Firecracker{
-		cfg:     cfg,
-		logger:  logger,
-		mkfs:    firecracker.MkfsExt4,
-		running: map[string]context.CancelFunc{},
+		cfg:       cfg,
+		logger:    logger,
+		mkfs:      firecracker.MkfsExt4,
+		newCgroup: newJobCgroup,
+		running:   map[string]context.CancelFunc{},
 	}
 	f.net = newJobNetwork(cfg.MaxEgressMbps, cfg.MaxEgressPPS, cfg.GuestResolvers)
 	// Remove state left by a daemon that died mid-job (job dirs, cgroups,
@@ -168,7 +170,7 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 
 	// Resource limits are created up front and always removed, so a job can
 	// never outlive its cgroup even if the VM start path fails midway.
-	limits, err := newJobCgroup(spec.ID, vcpu, memoryMB)
+	limits, err := f.newCgroup(spec.ID, vcpu, memoryMB)
 	if err != nil {
 		return result, fmt.Errorf("prepare resource limits: %w", err)
 	}
