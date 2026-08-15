@@ -84,22 +84,30 @@ Note: daemon-restart orphan cleanup is still tracked under phase 6 hardening; th
 
 ## Phase 4: provider-enforced limits
 
-Status: planned
+Status: complete
 
-Resource requests become enforceable ceilings controlled by the worker.
+Resource requests are now enforceable ceilings controlled by the worker, validated against hostile workloads on the Debian 13 amd64 / KVM worker over Tailscale.
 
-Planned work:
+Delivered and verified on real hardware:
 
-- cap Firecracker vCPU and memory configuration
-- cap workspace and writable-disk size
-- place each Firecracker process in a cgroup v2 subtree
-- set CPU, memory, process-count, and I/O limits where supported
-- enforce wall-clock timeout outside the guest
-- terminate the full VM process tree on cancellation or limit breach
-- report whether completion, timeout, cancellation, or a resource limit ended the job
-- keep guest networking disabled during hostile-workload validation
+- per-job cgroup v2 subtree around every Firecracker process (`internal/executor/cgroup_linux.go`)
+- `cpu.max` at the requested vCPU count, `memory.max` at requested RAM plus headroom, `pids.max` for the VM's own threads
+- guest-side pids cap (256) so a fork bomb exhausts forks instead of guest kernel memory, starving the agent
+- guest reaps and bounds orphaned background children before reporting completion
+- CLI resource flags: `--cpu`, `--memory-mb`, `--disk-mb`, `--timeout`
+- Firecracker boot switched from `--config-file` to the API socket, which also enables serial console capture (`internal/firecracker/api.go`); guest diagnostics are additionally streamed to the host over vsock
+- API-driven boot also exposes the Firecracker API for future lifecycle control
 
-Acceptance criteria:
+Hostile workload results on real hardware (2 vCPU jobs, Debian 13):
+
+- infinite loop: terminated at the timeout, exit 124, cgroup removed
+- fork bomb: contained at 256 guest processes; host load stayed below 0.6 and SSH round-trips stayed under 0.4 s; guest survived and reported completion
+- memory bomb (exponential string growth): `sh: out of memory`, exit 1, guest and host unaffected
+- disk exhaustion (`dd` into `/workspace`): ENOSPC at the workspace image boundary, host unaffected
+- clamp check: `--cpu 99 --memory-mb 99999` was clamped to the worker's configured 4 vCPU / 4096 MiB in both the VM config and the cgroup
+- zero VM dirs, Firecracker processes, and cgroups left after every test
+
+Acceptance criteria: all met.
 
 - an infinite loop stops at the configured timeout
 - memory exhaustion kills only the job

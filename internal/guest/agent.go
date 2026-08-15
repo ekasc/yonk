@@ -5,6 +5,7 @@ package guest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,10 +29,14 @@ const (
 // Run performs init duties, connects to the host, and runs the submitted job.
 // The agent must be the first process (PID 1) of the initramfs.
 func Run(log io.Writer) error {
+	logSink := &teeLog{console: log}
 	if err := mountBasics(); err != nil {
 		return err
 	}
-	fmt.Fprintf(log, "yonk-guest: mounts ready\n")
+	fmt.Fprintf(logSink, "yonk-guest: mounts ready\n")
+	if err := enablePidsLimit(); err != nil {
+		fmt.Fprintf(logSink, "yonk-guest: pids limit unavailable: %v\n", err)
+	}
 	os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
 	if err := os.MkdirAll("/root", 0o700); err != nil {
 		return fmt.Errorf("create /root: %w", err)
@@ -42,9 +47,10 @@ func Run(log io.Writer) error {
 		return fmt.Errorf("connect to host: %w", err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(log, "yonk-guest: vsock connected\n")
-
 	enc := newLockedEncoder(conn)
+	logSink.enc = enc
+	fmt.Fprintf(logSink, "yonk-guest: vsock connected\n")
+
 	dec := json.NewDecoder(conn)
 	if err := enc.Encode(guestproto.Message{Type: guestproto.MsgHello}); err != nil {
 		return fmt.Errorf("send hello: %w", err)
@@ -68,7 +74,7 @@ func Run(log io.Writer) error {
 	}
 	defer func() { _ = unix.Unmount(workspaceMount, 0) }()
 
-	return runJob(msg.Job, enc, dec, log)
+	return runJob(msg.Job, enc, dec, logSink)
 }
 
 func dialHost() (*vsock.Conn, error) {
@@ -176,10 +182,17 @@ func runJob(spec *job.Job, enc *lockedEncoder, dec *json.Decoder, log io.Writer)
 	runErr := cmd.Wait()
 	copyWG.Wait()
 
+	// A shell may exit while its background children keep running (a fork
+	// bomb does exactly this). Reap orphans and bound them by the job
+	// timeout so completion is never reported while work is still alive.
+	reapOrphans(ctx, killGroup)
+
 	result.DurationMillis = time.Since(start).Milliseconds()
 	if cmd.ProcessState != nil {
 		result.CPUTimeMillis = cmd.ProcessState.UserTime().Milliseconds() + cmd.ProcessState.SystemTime().Milliseconds()
-		if code := cmd.ProcessState.ExitCode(); code >= 0 {
+		if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			result.ExitCode = 128 + int(status.Signal())
+		} else if code := cmd.ProcessState.ExitCode(); code >= 0 {
 			result.ExitCode = code
 		}
 	}
@@ -225,6 +238,31 @@ func isCancelled(cancelCh chan struct{}) bool {
 	}
 }
 
+// reapOrphans waits for the job's remaining children. At the deadline it
+// kills the job's process group and drains every child before returning.
+func reapOrphans(ctx context.Context, killGroup func()) {
+	for {
+		select {
+		case <-ctx.Done():
+			killGroup()
+			for {
+				if _, err := unix.Wait4(-1, nil, 0, nil); err != nil {
+					return
+				}
+			}
+		default:
+		}
+		pid, err := unix.Wait4(-1, nil, unix.WNOHANG, nil)
+		if errors.Is(err, unix.ECHILD) {
+			return
+		}
+		if pid == 0 {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+	}
+}
+
 func sendResult(enc *lockedEncoder, result guestproto.Result) {
 	_ = enc.Encode(guestproto.Message{Type: guestproto.MsgResult, Result: &result})
 }
@@ -255,6 +293,26 @@ type guestEventWriter struct {
 func (w guestEventWriter) Write(p []byte) (int, error) {
 	if err := w.enc.Encode(guestproto.Message{Type: w.eventType, Data: p}); err != nil {
 		return 0, err
+	}
+	return len(p), nil
+}
+
+// teeLog writes diagnostics to the serial console and, once the vsock
+// connection exists, also forwards them to the host as log messages.
+type teeLog struct {
+	mu      sync.Mutex
+	console io.Writer
+	enc     *lockedEncoder
+}
+
+func (t *teeLog) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.console != nil {
+		_, _ = t.console.Write(p)
+	}
+	if t.enc != nil {
+		_ = t.enc.Encode(guestproto.Message{Type: guestproto.MsgLog, Data: p})
 	}
 	return len(p), nil
 }

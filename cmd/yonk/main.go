@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/ekassinghchhabra/yonk/internal/client"
@@ -25,7 +26,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printUsage(stderr)
 		return 2
 	}
-	workerEndpoint, command, commandArgs, exclusions, err := parseRunArgs(args[1:])
+	workerEndpoint, command, commandArgs, options, err := parseRunArgs(args[1:])
 	if err != nil {
 		fmt.Fprintf(stderr, "yonk: %v\n", err)
 		printUsage(stderr)
@@ -62,7 +63,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "worker: %s\n", info.Name)
 	fmt.Fprintln(stdout, "syncing workspace...")
-	archive, err := workspace.CreateArchive(ctx, workingDirectory, exclusions)
+	archive, err := workspace.CreateArchive(ctx, workingDirectory, options.exclusions)
 	if err != nil {
 		fmt.Fprintf(stderr, "yonk: package workspace: %v\n", err)
 		return clientFailureExitCode
@@ -86,8 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Args:           commandArgs,
 		CWD:            ".",
 		Platform:       info.Executors[0].Platform,
-		Resources:      job.Resources{CPU: 1, MemoryMB: 128, DiskMB: 8192},
-		TimeoutSeconds: 30,
+		Resources:      job.Resources{CPU: options.cpu, MemoryMB: options.memoryMB, DiskMB: options.diskMB},
+		TimeoutSeconds: options.timeoutSeconds,
 	}
 	result, err := protocolClient.Run(ctx, spec, archiveFile, func(event job.Event) error {
 		switch event.Type {
@@ -113,11 +114,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return result.ExitCode
 }
 
-func parseRunArgs(args []string) (worker, command string, commandArgs, exclusions []string, err error) {
-	if len(args) < 3 || args[0] == "" {
-		return "", "", nil, nil, errors.New("run requires a worker and a command after --")
+// runOptions carries resource requests and workspace exclusions.
+type runOptions struct {
+	exclusions     []string
+	cpu            int
+	memoryMB       int
+	diskMB         int
+	timeoutSeconds int
+}
+
+func defaultRunOptions() runOptions {
+	return runOptions{
+		exclusions:     workspace.DefaultExclusions(),
+		cpu:            1,
+		memoryMB:       128,
+		diskMB:         8192,
+		timeoutSeconds: 30,
 	}
-	exclusions = workspace.DefaultExclusions()
+}
+
+func parseRunArgs(args []string) (worker, command string, commandArgs []string, options runOptions, err error) {
+	if len(args) < 3 || args[0] == "" {
+		return "", "", nil, runOptions{}, errors.New("run requires a worker and a command after --")
+	}
+	options = defaultRunOptions()
 	separator := -1
 	for index := 1; index < len(args); index++ {
 		switch args[index] {
@@ -126,20 +146,57 @@ func parseRunArgs(args []string) (worker, command string, commandArgs, exclusion
 			index = len(args)
 		case "--exclude":
 			if index+1 >= len(args) || args[index+1] == "" {
-				return "", "", nil, nil, errors.New("--exclude requires a path")
+				return "", "", nil, runOptions{}, errors.New("--exclude requires a path")
 			}
-			exclusions = append(exclusions, args[index+1])
+			options.exclusions = append(options.exclusions, args[index+1])
+			index++
+		case "--cpu":
+			if options.cpu, err = parseRunInt(args, index, "--cpu", 1, 1024); err != nil {
+				return "", "", nil, runOptions{}, err
+			}
+			index++
+		case "--memory-mb":
+			if options.memoryMB, err = parseRunInt(args, index, "--memory-mb", 1, 1<<20); err != nil {
+				return "", "", nil, runOptions{}, err
+			}
+			index++
+		case "--disk-mb":
+			if options.diskMB, err = parseRunInt(args, index, "--disk-mb", 1, 1<<20); err != nil {
+				return "", "", nil, runOptions{}, err
+			}
+			index++
+		case "--timeout":
+			if options.timeoutSeconds, err = parseRunInt(args, index, "--timeout", 1, 300); err != nil {
+				return "", "", nil, runOptions{}, err
+			}
 			index++
 		default:
-			return "", "", nil, nil, fmt.Errorf("unknown run option %q", args[index])
+			return "", "", nil, runOptions{}, fmt.Errorf("unknown run option %q", args[index])
 		}
 	}
 	if separator == -1 || separator+1 >= len(args) || args[separator+1] == "" {
-		return "", "", nil, nil, errors.New("run requires a command after --")
+		return "", "", nil, runOptions{}, errors.New("run requires a command after --")
 	}
-	return args[0], args[separator+1], args[separator+2:], exclusions, nil
+	return args[0], args[separator+1], args[separator+2:], options, nil
+}
+
+func parseRunInt(args []string, index int, flag string, min, max int) (int, error) {
+	if index+1 >= len(args) {
+		return 0, fmt.Errorf("%s requires a value", flag)
+	}
+	value, err := strconv.Atoi(args[index+1])
+	if err != nil || value < min || value > max {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d", flag, min, max)
+	}
+	return value, nil
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: yonk run <worker-endpoint> [--exclude <path>]... -- <command> [args...]")
+	fmt.Fprintln(w, "usage: yonk run <worker-endpoint> [options] -- <command> [args...]")
+	fmt.Fprintln(w, "options:")
+	fmt.Fprintln(w, "  --exclude <path>   exclude a path from the workspace (repeatable)")
+	fmt.Fprintln(w, "  --cpu <n>          requested vCPUs (default 1)")
+	fmt.Fprintln(w, "  --memory-mb <n>    requested memory MiB (default 128)")
+	fmt.Fprintln(w, "  --disk-mb <n>      requested workspace disk MiB (default 8192)")
+	fmt.Fprintln(w, "  --timeout <secs>   job timeout, 1-300 (default 30)")
 }

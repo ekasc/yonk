@@ -26,7 +26,8 @@ Yonk is under active development. The client/server protocol and workspace trans
 | Firecracker/KVM isolation | Working |
 | CPU and memory ceilings | Working |
 | Job timeout | Working |
-| cgroup resource limits | Planned |
+| cgroup resource limits | Working |
+| Fork-bomb and memory-bomb containment | Working |
 | Artifacts | Planned |
 
 Do not expose the current daemon to untrusted clients. It does not have application-level authentication yet, and the restricted executor is not a security boundary.
@@ -137,6 +138,12 @@ exit: 0
 ```
 
 The daemon listens on `127.0.0.1:9665` by default. Pass `--listen` to accept remote connections.
+
+Resource requests and the timeout can be set per job; the worker enforces them as ceilings:
+
+```bash
+./yonk run debian --cpu 4 --memory-mb 4096 --disk-mb 8192 --timeout 300 -- go test ./...
+```
 
 ## Workspace transfer
 

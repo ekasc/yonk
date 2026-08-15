@@ -119,6 +119,9 @@ func (f *Firecracker) preflight() error {
 	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
 		return fmt.Errorf("microvm executor requires mkfs.ext4 (e2fsprogs): %w", err)
 	}
+	if err := cgroupV2Available(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, f.cfg.BinPath, "--version").Output(); err != nil {
@@ -178,33 +181,36 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 		return result, fmt.Errorf("build initramfs: %w", err)
 	}
 
+	vcpu := clampInt(spec.Resources.CPU, 1, f.cfg.MaxVCPU)
+	memoryMB := clampInt(spec.Resources.MemoryMB, 128, f.cfg.MaxMemoryMB)
+
+	// Resource limits are created up front and always removed, so a job can
+	// never outlive its cgroup even if the VM start path fails midway.
+	limits, err := newJobCgroup(spec.ID, vcpu, memoryMB)
+	if err != nil {
+		return result, fmt.Errorf("prepare resource limits: %w", err)
+	}
+	defer limits.delete()
+
 	vsockPath := filepath.Join(jobDir, "v")
-	cfg := firecracker.Config{
-		BootSource: firecracker.BootSource{
-			KernelImagePath: f.cfg.KernelPath,
-			InitrdPath:      initramfsPath,
-			BootArgs:        "console=ttyS0 reboot=k panic=1 pci=off",
-		},
-		Drives: []firecracker.Drive{{
-			DriveID:      "workspace",
-			PathOnHost:   workspaceImage,
-			IsRootDevice: false,
-			IsReadOnly:   false,
-		}},
-		MachineConfig: firecracker.MachineConfig{
-			VCPUCount:  clampInt(spec.Resources.CPU, 1, f.cfg.MaxVCPU),
-			MemSizeMiB: clampInt(spec.Resources.MemoryMB, 128, f.cfg.MaxMemoryMB),
-			SMT:        false,
-		},
-		VSock: firecracker.VSock{GuestCID: guestproto.GuestCID, UDSPath: vsockPath},
-		Serial: &firecracker.Serial{
-			SerialOutPath: filepath.Join(jobDir, "console.log"),
-		},
+	bootSource := firecracker.BootSource{
+		KernelImagePath: f.cfg.KernelPath,
+		InitrdPath:      initramfsPath,
+		BootArgs:        "console=ttyS0 reboot=k panic=1 pci=off",
 	}
-	cfgPath := filepath.Join(jobDir, "config.json")
-	if err := firecracker.WriteConfig(cfgPath, cfg); err != nil {
-		return result, err
+	drives := []firecracker.Drive{{
+		DriveID:      "workspace",
+		PathOnHost:   workspaceImage,
+		IsRootDevice: false,
+		IsReadOnly:   false,
+	}}
+	machineConfig := firecracker.MachineConfig{
+		VCPUCount:  vcpu,
+		MemSizeMiB: memoryMB,
+		SMT:        false,
 	}
+	vsockConfig := firecracker.VSock{GuestCID: guestproto.GuestCID, UDSPath: vsockPath}
+	serialConfig := firecracker.Serial{SerialOutPath: filepath.Join(jobDir, "console.log")}
 
 	// Guest-initiated connections arrive on {uds_path}_{port}; listen before
 	// the guest boots so the agent's dial never races the host.
@@ -215,8 +221,7 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 	defer listener.Close()
 
 	cmd := exec.CommandContext(jobCtx, f.cfg.BinPath,
-		"--api-sock", filepath.Join(jobDir, "api.sock"),
-		"--config-file", cfgPath)
+		"--api-sock", filepath.Join(jobDir, "api.sock"))
 	vmLog := &syncBuffer{}
 	cmd.Stdout = vmLog
 	cmd.Stderr = vmLog
@@ -228,6 +233,17 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 		_ = cmd.Wait()
 		close(processExited)
 	}()
+	if err := limits.addProcess(cmd.Process.Pid); err != nil {
+		killProcess(cmd, processExited, killGrace)
+		return result, err
+	}
+
+	apiSocket := filepath.Join(jobDir, "api.sock")
+	api := firecracker.NewApiClient(apiSocket)
+	if err := f.configureVM(jobCtx, api, apiSocket, bootSource, drives, machineConfig, vsockConfig, serialConfig); err != nil {
+		killProcess(cmd, processExited, killGrace)
+		return result, err
+	}
 
 	conn, err := f.acceptGuest(jobCtx, cmd, listener, processExited, vmLog)
 	if conn == nil {
@@ -258,7 +274,53 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 	result, runErr := f.readGuest(jobCtx, conn, spec, stdout, stderr, result, started)
 	close(readDone)
 	killProcess(cmd, processExited, killGrace)
+	if runErr != nil {
+		if tail := consoleTail(jobDir); tail != "" {
+			f.logger.Warn("guest failed", "job_id", spec.ID, "error", runErr, "console_tail", tail)
+		}
+	}
 	return result, runErr
+}
+
+// consoleTail returns the last lines of the guest serial console log.
+func consoleTail(jobDir string) string {
+	data, err := os.ReadFile(filepath.Join(jobDir, "console.log"))
+	if err != nil {
+		return ""
+	}
+	const maxTail = 8 << 10
+	if len(data) > maxTail {
+		data = data[len(data)-maxTail:]
+	}
+	return string(data)
+}
+
+// configureVM waits for the API socket, applies the VM configuration, and
+// boots the guest.
+func (f *Firecracker) configureVM(ctx context.Context, api *firecracker.ApiClient, apiSocket string, bootSource firecracker.BootSource, drives []firecracker.Drive, machineConfig firecracker.MachineConfig, vsockConfig firecracker.VSock, serialConfig firecracker.Serial) error {
+	if err := firecracker.WaitForSocket(ctx, apiSocket); err != nil {
+		return err
+	}
+	type apiStep struct {
+		path string
+		body any
+	}
+	steps := []apiStep{
+		{"/boot-source", bootSource},
+		{"/machine-config", machineConfig},
+		{"/vsock", vsockConfig},
+		{"/serial", serialConfig},
+	}
+	for _, drive := range drives {
+		steps = append(steps, apiStep{path: "/drives/" + drive.DriveID, body: drive})
+	}
+	steps = append(steps, apiStep{path: "/actions", body: map[string]string{"action_type": "InstanceStart"}})
+	for _, step := range steps {
+		if err := api.Put(ctx, step.path, step.body); err != nil {
+			return fmt.Errorf("configure firecracker: %w", err)
+		}
+	}
+	return nil
 }
 
 func (f *Firecracker) acceptGuest(jobCtx context.Context, cmd *exec.Cmd, listener net.Listener, processExited <-chan struct{}, vmLog *syncBuffer) (net.Conn, error) {
