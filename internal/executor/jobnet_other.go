@@ -5,7 +5,7 @@ package executor
 import (
 	"errors"
 
-	"github.com/ekassinghchhabra/yonk/internal/firecracker"
+	"github.com/ekasc/yonk/internal/firecracker"
 )
 
 // jobNetwork is a no-op off Linux: real networking requires netlink and nft,

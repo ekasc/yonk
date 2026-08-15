@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ekassinghchhabra/yonk/internal/job"
-	"github.com/ekassinghchhabra/yonk/internal/workspace"
+	"github.com/ekasc/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/workspace"
 )
 
 func TestFirecrackerRunStreamsOutput(t *testing.T) {

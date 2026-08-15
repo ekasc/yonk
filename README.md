@@ -73,7 +73,7 @@ A run currently follows this path:
 
 ## Build
 
-Yonk requires Go 1.23 or newer.
+Yonk requires Go 1.25 or newer.
 
 ```bash
 go build -o bin/yonk ./cmd/yonk

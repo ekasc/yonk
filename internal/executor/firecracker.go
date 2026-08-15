@@ -17,10 +17,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ekassinghchhabra/yonk/internal/firecracker"
-	"github.com/ekassinghchhabra/yonk/internal/guestproto"
-	"github.com/ekassinghchhabra/yonk/internal/job"
-	"github.com/ekassinghchhabra/yonk/internal/workspace"
+	"github.com/ekasc/yonk/internal/firecracker"
+	"github.com/ekasc/yonk/internal/guestproto"
+	"github.com/ekasc/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/workspace"
 )
 
 const (

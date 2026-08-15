@@ -16,7 +16,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ekassinghchhabra/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/job"
 )
 
 const defaultPort = "9665"

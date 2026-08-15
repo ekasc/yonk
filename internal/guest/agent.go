@@ -20,8 +20,8 @@ import (
 	"github.com/mdlayher/vsock"
 	"golang.org/x/sys/unix"
 
-	"github.com/ekassinghchhabra/yonk/internal/guestproto"
-	"github.com/ekassinghchhabra/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/guestproto"
+	"github.com/ekasc/yonk/internal/job"
 )
 
 const (

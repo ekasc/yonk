@@ -5,8 +5,8 @@ import (
 	"context"
 	"io"
 
-	"github.com/ekassinghchhabra/yonk/internal/job"
-	"github.com/ekassinghchhabra/yonk/internal/workspace"
+	"github.com/ekasc/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/workspace"
 )
 
 // Executor executes jobs and reports the platforms it can serve.

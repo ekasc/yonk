@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ekassinghchhabra/yonk/internal/job"
-	"github.com/ekassinghchhabra/yonk/internal/workspace"
+	"github.com/ekasc/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/workspace"
 )
 
 var errNotRunning = errors.New("job is not running")

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ekassinghchhabra/yonk/internal/guestproto"
+	"github.com/ekasc/yonk/internal/guestproto"
 )
 
 type vsockBody struct {

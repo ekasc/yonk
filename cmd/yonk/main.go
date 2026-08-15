@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/ekassinghchhabra/yonk/internal/client"
-	"github.com/ekassinghchhabra/yonk/internal/job"
-	"github.com/ekassinghchhabra/yonk/internal/workspace"
+	"github.com/ekasc/yonk/internal/client"
+	"github.com/ekasc/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/workspace"
 )
 
 const clientFailureExitCode = 125
