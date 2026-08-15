@@ -191,11 +191,15 @@ Planned work:
 - safe artifact collection from the guest
 - bounded artifact downloads with traversal protection
 - daemon startup checks and health reporting
-- graceful shutdown and orphan cleanup
+- graceful shutdown
 - configurable worker-side policy for resource ceilings and concurrency
 - authenticated client access independent of the underlying network
 - protocol compatibility tests across released client and daemon versions
 - installation packages and service definitions for Linux workers
+
+Delivered:
+
+- daemon-restart orphan cleanup (`sweepOrphans`): on daemon start, removes job directories, cgroups, and TAP devices left by a daemon that died mid-job, while never touching state owned by a live VM. Validated on real hardware: fabricated and genuinely orphaned state from a killed daemon is swept; a second daemon's startup sweep leaves a running job untouched.
 
 ## Later work
 

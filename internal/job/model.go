@@ -4,6 +4,8 @@ package job
 import (
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 )
 
@@ -83,11 +85,17 @@ func (j Job) Validate() error {
 	if j.Resources.CPU < 1 || j.Resources.MemoryMB < 1 || j.Resources.DiskMB < 1 {
 		return errors.New("job cpu, memory_mb, and disk_mb must be positive")
 	}
-	if j.TimeoutSeconds < 1 || j.TimeoutSeconds > 300 {
-		return errors.New("timeout_seconds must be between 1 and 300")
+	if j.TimeoutSeconds < 1 || j.TimeoutSeconds > 7200 {
+		return errors.New("timeout_seconds must be between 1 and 7200")
 	}
-	if len(j.Artifacts) != 0 {
-		return errors.New("milestone 1 does not support artifacts")
+	if len(j.Artifacts) > 16 {
+		return errors.New("job has too many artifacts: maximum is 16")
+	}
+	for _, artifact := range j.Artifacts {
+		clean := path.Clean(artifact)
+		if artifact == "" || artifact != clean || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("artifact path %q must be a relative path inside the workspace", artifact)
+		}
 	}
 	switch j.Network {
 	case "", "none", "egress":
@@ -139,6 +147,7 @@ const (
 	EventStatus     EventType = "status"
 	EventStdout     EventType = "stdout"
 	EventStderr     EventType = "stderr"
+	EventArtifact   EventType = "artifact"
 	EventCompletion EventType = "completion"
 	EventFailure    EventType = "failure"
 )
@@ -147,6 +156,7 @@ const (
 type Event struct {
 	Type    EventType `json:"type"`
 	Data    []byte    `json:"data,omitempty"`
+	Name    string    `json:"name,omitempty"`
 	Status  string    `json:"status,omitempty"`
 	Result  *Result   `json:"result,omitempty"`
 	Failure *Failure  `json:"failure,omitempty"`

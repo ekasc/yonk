@@ -172,7 +172,7 @@ func (c *Client) Run(ctx context.Context, spec job.Job, archive io.Reader, handl
 			}
 		}
 		switch event.Type {
-		case job.EventStatus, job.EventStdout, job.EventStderr:
+		case job.EventStatus, job.EventStdout, job.EventStderr, job.EventArtifact:
 			continue
 		case job.EventCompletion:
 			if event.Result == nil {

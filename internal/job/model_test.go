@@ -31,7 +31,9 @@ func TestJobValidate(t *testing.T) {
 		{name: "missing platform", mutate: func(j *Job) { j.Platform.OS = "" }, want: "platform"},
 		{name: "invalid resources", mutate: func(j *Job) { j.Resources.CPU = 0 }, want: "must be positive"},
 		{name: "invalid timeout", mutate: func(j *Job) { j.TimeoutSeconds = 0 }, want: "timeout_seconds"},
-		{name: "artifacts", mutate: func(j *Job) { j.Artifacts = []string{"out.txt"} }, want: "does not support artifacts"},
+		{name: "artifacts invalid path", mutate: func(j *Job) { j.Artifacts = []string{"../escape"} }, want: "artifact path"},
+		{name: "artifacts valid", mutate: func(j *Job) { j.Artifacts = []string{"apk/app-debug.apk"} }},
+		{name: "artifacts too many", mutate: func(j *Job) { j.Artifacts = make([]string, 17) }, want: "too many artifacts"},
 		{name: "network invalid", mutate: func(j *Job) { j.Network = "public" }, want: "unsupported network mode"},
 		{name: "network egress", mutate: func(j *Job) { j.Network = "egress" }},
 	}

@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -201,6 +203,8 @@ func runJob(spec *job.Job, enc *lockedEncoder, dec *json.Decoder, log io.Writer)
 	// timeout so completion is never reported while work is still alive.
 	reapOrphans(ctx, killGroup)
 
+	sendArtifacts(spec, enc, log)
+
 	result.DurationMillis = time.Since(start).Milliseconds()
 	result.PeakMemoryBytes = peakBytes.Load()
 	if cmd.ProcessState != nil {
@@ -250,6 +254,41 @@ func isCancelled(cancelCh chan struct{}) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// maxArtifactBytes caps the size of a single returned artifact.
+const maxArtifactBytes = 512 << 20
+
+// sendArtifacts streams requested artifact files to the host before the
+// result. Missing or oversized files are skipped with a log line; the job is
+// not failed for an unavailable artifact.
+func sendArtifacts(spec *job.Job, enc *lockedEncoder, log io.Writer) {
+	for _, name := range spec.Artifacts {
+		path := filepath.Join(workspaceMount, name)
+		if !strings.HasPrefix(path, workspaceMount+"/") {
+			fmt.Fprintf(log, "yonk-guest: skipping unsafe artifact %q\n", name)
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Fprintf(log, "yonk-guest: artifact %q unavailable: %v\n", name, err)
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Size() > maxArtifactBytes {
+			fmt.Fprintf(log, "yonk-guest: artifact %q too large or not a file\n", name)
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(log, "yonk-guest: read artifact %q: %v\n", name, err)
+			continue
+		}
+		if err := enc.Encode(guestproto.Message{Type: guestproto.MsgArtifact, Name: filepath.Base(name), Data: data}); err != nil {
+			fmt.Fprintf(log, "yonk-guest: send artifact %q: %v\n", name, err)
+			return
+		}
+		fmt.Fprintf(log, "yonk-guest: artifact sent %s (%d bytes)\n", name, len(data))
 	}
 }
 

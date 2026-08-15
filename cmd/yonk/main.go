@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -95,6 +96,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Resources:      job.Resources{CPU: options.cpu, MemoryMB: options.memoryMB, DiskMB: options.diskMB},
 		TimeoutSeconds: options.timeoutSeconds,
 		Network:        network,
+		Artifacts:      options.artifacts,
 	}
 	result, err := protocolClient.Run(ctx, spec, archiveFile, func(event job.Event) error {
 		switch event.Type {
@@ -104,6 +106,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		case job.EventStderr:
 			_, err := stderr.Write(event.Data)
 			return err
+		case job.EventArtifact:
+			return writeArtifact(workingDirectory, event.Name, event.Data, stdout)
 		default:
 			return nil
 		}
@@ -133,6 +137,7 @@ type runOptions struct {
 	diskMB           int
 	timeoutSeconds   int
 	network          string
+	artifacts        []string
 }
 
 func defaultRunOptions() runOptions {
@@ -140,7 +145,7 @@ func defaultRunOptions() runOptions {
 		exclusions:     workspace.DefaultExclusions(),
 		cpu:            2,
 		memoryMB:       1024,
-		diskMB:         8192,
+		diskMB:         512,
 		timeoutSeconds: 60,
 	}
 }
@@ -181,7 +186,7 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 			}
 			index++
 		case "--timeout":
-			if options.timeoutSeconds, err = parseRunInt(args, index, "--timeout", 1, 300); err != nil {
+			if options.timeoutSeconds, err = parseRunInt(args, index, "--timeout", 1, 7200); err != nil {
 				return "", "", nil, runOptions{}, err
 			}
 			index++
@@ -195,6 +200,12 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 			default:
 				return "", "", nil, runOptions{}, fmt.Errorf("--network must be none or egress")
 			}
+			index++
+		case "--artifact":
+			if index+1 >= len(args) || args[index+1] == "" {
+				return "", "", nil, runOptions{}, errors.New("--artifact requires a workspace-relative path")
+			}
+			options.artifacts = append(options.artifacts, args[index+1])
 			index++
 		default:
 			return "", "", nil, runOptions{}, fmt.Errorf("unknown run option %q", args[index])
@@ -226,6 +237,20 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+// writeArtifact stores a returned artifact next to the workspace, using only
+// its base name so a hostile artifact cannot escape the working directory.
+func writeArtifact(dir, name string, data []byte, stdout io.Writer) error {
+	if name != filepath.Base(name) {
+		return fmt.Errorf("worker returned unsafe artifact name %q", name)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write artifact %s: %w", name, err)
+	}
+	fmt.Fprintf(stdout, "artifact: %s (%d bytes)\n", name, len(data))
+	return nil
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: yonk run <worker-endpoint> [options] -- <command> [args...]")
 	fmt.Fprintln(w, "options:")
@@ -233,7 +258,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --no-default-excludes   transfer everything, including node_modules and build dirs")
 	fmt.Fprintln(w, "  --cpu <n>               requested vCPUs (default 2)")
 	fmt.Fprintln(w, "  --memory-mb <n>         requested memory MiB (default 1024)")
-	fmt.Fprintln(w, "  --disk-mb <n>           requested workspace disk MiB (default 8192)")
-	fmt.Fprintln(w, "  --timeout <secs>        job timeout, 1-300 (default 60)")
+	fmt.Fprintln(w, "  --disk-mb <n>           requested workspace disk MiB (default 512)")
+	fmt.Fprintln(w, "  --timeout <secs>        job timeout, 1-7200 (default 60)")
 	fmt.Fprintln(w, "  --network <mode>         none or egress (default none)")
+	fmt.Fprintln(w, "  --artifact <path>        workspace-relative path to return after the job (repeatable)")
 }

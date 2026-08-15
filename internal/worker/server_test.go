@@ -137,7 +137,7 @@ func (e *workspaceProbeExecutor) Capabilities(context.Context) ([]job.ExecutorCa
 	}}, nil
 }
 
-func (e *workspaceProbeExecutor) Run(_ context.Context, _ job.Job, work workspace.Workspace, stdout, _ io.Writer) (job.Result, error) {
+func (e *workspaceProbeExecutor) Run(_ context.Context, _ job.Job, work workspace.Workspace, stdout, _ io.Writer, _ func(string, []byte) error) (job.Result, error) {
 	e.workspaceRoot = work.Root
 	content, err := os.ReadFile(filepath.Join(work.Root, "marker.txt"))
 	if err != nil {

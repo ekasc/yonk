@@ -193,7 +193,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		"workspace_bytes", workspaceStats.UncompressedBytes,
 	)
 	work := workspace.Workspace{Root: workspaceRoot, Stats: workspaceStats}
-	result, executionErr := s.executor.Run(r.Context(), request.Job, work, eventstream.Writer{Sink: sink, EventType: job.EventStdout}, eventstream.Writer{Sink: sink, EventType: job.EventStderr})
+	result, executionErr := s.executor.Run(r.Context(), request.Job, work,
+		eventstream.Writer{Sink: sink, EventType: job.EventStdout},
+		eventstream.Writer{Sink: sink, EventType: job.EventStderr},
+		func(name string, data []byte) error {
+			return sink.Emit(job.Event{Type: job.EventArtifact, Name: name, Data: data})
+		})
 	result.Worker = s.info.Name
 	result.BytesUploaded = workspaceStats.CompressedBytes
 	result.BytesDownloaded = sink.DataBytes()

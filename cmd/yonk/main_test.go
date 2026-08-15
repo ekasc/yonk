@@ -20,7 +20,7 @@ func TestParseRunArgs(t *testing.T) {
 		{name: "URL", args: []string{"http://worker:8080", "--", "echo"}, worker: "http://worker:8080", command: "echo"},
 		{name: "exclude", args: []string{"debian", "--exclude", "vendor", "--", "echo"}, worker: "debian", command: "echo", exclude: "vendor"},
 		{name: "resources", args: []string{"debian", "--cpu", "4", "--memory-mb", "2048", "--disk-mb", "1024", "--timeout", "120", "--", "echo"}, worker: "debian", command: "echo", cpu: 4, memoryMB: 2048, diskMB: 1024, timeout: 120},
-		{name: "bad timeout", args: []string{"debian", "--timeout", "999", "--", "echo"}, wantFail: true},
+		{name: "bad timeout", args: []string{"debian", "--timeout", "9999", "--", "echo"}, wantFail: true},
 		{name: "missing separator", args: []string{"debian", "echo", "hello"}, wantFail: true},
 		{name: "missing command", args: []string{"debian", "--"}, wantFail: true},
 	}
