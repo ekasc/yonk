@@ -5,7 +5,7 @@ package firecracker
 // BootSource identifies the guest kernel and optional initramfs.
 type BootSource struct {
 	KernelImagePath string `json:"kernel_image_path"`
-	InitrdPath      string `json:"initrd_path"`
+	InitrdPath      string `json:"initrd_path,omitempty"`
 	BootArgs        string `json:"boot_args"`
 }
 

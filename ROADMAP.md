@@ -118,27 +118,38 @@ Acceptance criteria: all met.
 
 ## Phase 5: real Linux workloads
 
-Status: planned
+Status: complete
 
-Run useful build and test commands against the transferred workspace.
+Real build and test workloads now run inside the microVM against the transferred workspace, validated on the Debian 13 amd64 / KVM worker over Tailscale.
 
-Planned work:
+Delivered and verified on real hardware:
 
-- publish a repeatable worker image build
-- decide how toolchains enter the image without putting image details in jobs
-- support commands such as `go test ./...`, `pnpm test`, and project builds
-- return wall time, CPU time, peak memory, transfer bytes, exit code, and termination reason
-- verify stdout and stderr ordering is useful under sustained output
-- document worker image compatibility and update procedures
+- read-only Debian rootfs with toolchains baked in (`scripts/build-rootfs.sh`): Go 1.24, Node 20, pnpm 9, gcc, git, make, and the static `yonk-guest` agent
+- the rootfs is immutable and shared across jobs; the per-job workspace disk is the only writable area (`/workspace`)
+- guest boots `root=/dev/vda ro` with `init=/usr/sbin/yonk-guest`; no initramfs
+- virtio-rng entropy device, guest-side pids cap, and peak-memory sampling (process-group RSS)
+- CLI prints duration and peak memory; worker logs CPU time, peak memory, and transfer bytes per job
+- `scripts/rebake-rootfs.sh` rebuilds the image from a staging directory without re-running debootstrap
 
-Acceptance criteria:
+Real workloads verified inside the guest:
+
+- `go test ./...` and `go run .` on an uncommitted project (ok testproj/calc; sum: 500500)
+- `make` + gcc build and run (hello from C)
+- `pnpm test` (node tests passed)
+- sustained output: 2000 stdout + 2000 stderr lines streamed intact
+- telemetry: duration 8.7 s, CPU 12.8 s, peak memory 251 MB, upload/download bytes, exit code, termination reason
+- zero VM dirs, Firecracker processes, and cgroups after every job
+
+Two environment defects were found and fixed during validation: the 4.14 quickstart kernel lacks the virtio-rng driver, which made Node hang on a blocking `getrandom()` (switched to the Firecracker 5.10 CI kernel), and pnpm 10 requires Node 22 (pinned pnpm@9 for Debian's Node 20).
+
+Acceptance criteria: all met.
 
 - a real project with uncommitted changes runs successfully on Debian amd64
 - the Mac stays mostly idle while Debian performs the work
 - the local process exits with the remote command's code
 - telemetry is present for successful and failed commands
 
-Reaching these criteria completes the first useful Yonk release.
+Note: jobs have no network access. `pnpm install` and module downloads require the next phase, which enables and explicitly controls guest networking.
 
 ## Phase 6: artifacts and operational hardening
 
