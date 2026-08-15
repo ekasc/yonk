@@ -12,9 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/ekassinghchhabra/yonk/internal/eventstream"
 	"github.com/ekassinghchhabra/yonk/internal/executor"
 	"github.com/ekassinghchhabra/yonk/internal/job"
 	"github.com/ekassinghchhabra/yonk/internal/workspace"
@@ -177,11 +177,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	sink := &eventSink{encoder: json.NewEncoder(w), flusher: flusher}
-	if err := sink.emit(job.Event{Type: job.EventStatus, Status: "workspace_ready"}); err != nil {
+	sink := eventstream.NewSink(w, flusher.Flush)
+	if err := sink.Emit(job.Event{Type: job.EventStatus, Status: "workspace_ready"}); err != nil {
 		return
 	}
-	if err := sink.emit(job.Event{Type: job.EventStatus, Status: "running"}); err != nil {
+	if err := sink.Emit(job.Event{Type: job.EventStatus, Status: "running"}); err != nil {
 		return
 	}
 
@@ -193,22 +193,22 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		"workspace_bytes", workspaceStats.UncompressedBytes,
 	)
 	work := workspace.Workspace{Root: workspaceRoot, Stats: workspaceStats}
-	result, executionErr := s.executor.Run(r.Context(), request.Job, work, eventWriter{sink: sink, eventType: job.EventStdout}, eventWriter{sink: sink, eventType: job.EventStderr})
+	result, executionErr := s.executor.Run(r.Context(), request.Job, work, eventstream.Writer{Sink: sink, EventType: job.EventStdout}, eventstream.Writer{Sink: sink, EventType: job.EventStderr})
 	result.Worker = s.info.Name
 	result.BytesUploaded = workspaceStats.CompressedBytes
-	result.BytesDownloaded = sink.dataBytesCount()
+	result.BytesDownloaded = sink.DataBytes()
 	cleanupErr := cleanup()
 	if cleanupErr != nil {
 		s.logger.Error("job cleanup failed", "job_id", request.Job.ID, "path", jobDirectory, "error", cleanupErr)
-		_ = sink.emit(job.Event{Type: job.EventFailure, Failure: &job.Failure{Code: "cleanup_failure", Message: cleanupErr.Error()}})
+		_ = sink.Emit(job.Event{Type: job.EventFailure, Failure: &job.Failure{Code: "cleanup_failure", Message: cleanupErr.Error()}})
 		return
 	}
-	if err := sink.emit(job.Event{Type: job.EventStatus, Status: "cleaned"}); err != nil {
+	if err := sink.Emit(job.Event{Type: job.EventStatus, Status: "cleaned"}); err != nil {
 		return
 	}
 	if executionErr != nil {
 		s.logger.Error("job execution failed", "job_id", request.Job.ID, "error", executionErr)
-		_ = sink.emit(job.Event{Type: job.EventFailure, Failure: &job.Failure{Code: "executor_failure", Message: executionErr.Error()}})
+		_ = sink.Emit(job.Event{Type: job.EventFailure, Failure: &job.Failure{Code: "executor_failure", Message: executionErr.Error()}})
 		return
 	}
 
@@ -218,7 +218,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		"duration_ms", result.DurationMillis,
 		"termination_reason", result.TerminationReason,
 	)
-	_ = sink.emit(job.Event{Type: job.EventCompletion, Result: &result})
+	_ = sink.Emit(job.Event{Type: job.EventCompletion, Result: &result})
 }
 
 func decodeJobPart(part io.Reader) (job.RunRequest, error) {
@@ -258,42 +258,6 @@ func (s *Server) supports(platform job.Platform) bool {
 		}
 	}
 	return false
-}
-
-type eventSink struct {
-	mu        sync.Mutex
-	encoder   *json.Encoder
-	flusher   http.Flusher
-	dataBytes int64
-}
-
-func (s *eventSink) emit(event job.Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.encoder.Encode(event); err != nil {
-		return fmt.Errorf("encode job event: %w", err)
-	}
-	s.dataBytes += int64(len(event.Data))
-	s.flusher.Flush()
-	return nil
-}
-
-func (s *eventSink) dataBytesCount() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.dataBytes
-}
-
-type eventWriter struct {
-	sink      *eventSink
-	eventType job.EventType
-}
-
-func (w eventWriter) Write(p []byte) (int, error) {
-	if err := w.sink.emit(job.Event{Type: w.eventType, Data: p}); err != nil {
-		return 0, err
-	}
-	return len(p), nil
 }
 
 func ensureEOF(decoder *json.Decoder) error {

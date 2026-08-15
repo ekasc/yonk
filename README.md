@@ -23,9 +23,10 @@ Yonk is under active development. The client/server protocol and workspace trans
 | Current working tree transfer | Working |
 | Configurable workspace exclusions | Working |
 | Temporary workspace cleanup | Working |
-| Firecracker/KVM isolation | Planned next |
-| CPU, memory, disk, and process limits | Planned |
-| General Linux commands | Blocked on isolation |
+| Firecracker/KVM isolation | Working |
+| CPU and memory ceilings | Working |
+| Job timeout | Working |
+| cgroup resource limits | Planned |
 | Artifacts | Planned |
 
 Do not expose the current daemon to untrusted clients. It does not have application-level authentication yet, and the restricted executor is not a security boundary.
@@ -81,6 +82,29 @@ Cross-compile the client for an Apple Silicon Mac and the daemon for Debian amd6
 GOOS=darwin GOARCH=arm64 go build -o bin/yonk ./cmd/yonk
 GOOS=linux GOARCH=amd64 go build -o bin/yonkd-linux-amd64 ./cmd/yonkd
 ```
+
+## Worker setup
+
+On the Debian worker, install the microVM assets with the setup script (run from the repository root as root):
+
+```bash
+sudo ./scripts/setup-worker.sh
+```
+
+The script downloads Firecracker, a guest kernel, and a static busybox into `/opt/yonk`, and cross-builds the static `yonk-guest` agent from this repository. It requires `curl`, `tar`, `go`, `e2fsprogs` (for `mkfs.ext4`), and `/dev/kvm`.
+
+Start `yonkd` with the microVM executor:
+
+```bash
+sudo yonkd --executor microvm \
+  --listen 100.x.y.z:9665 \
+  --firecracker-bin /opt/yonk/firecracker \
+  --kernel /opt/yonk/vmlinux.bin \
+  --guest-agent /opt/yonk/yonk-guest \
+  --busybox /opt/yonk/busybox
+```
+
+The default is `--executor auto`, which uses the microVM executor when KVM and all assets are available and falls back to the restricted host executor otherwise. `--executor microvm` fails loudly instead of falling back.
 
 ## Run
 
@@ -177,27 +201,33 @@ The initial production executor will support `linux/amd64` through Firecracker a
 
 Submitted workloads must be treated as malicious. Yonk will not enable general command execution on the host.
 
-The Firecracker executor will put every job in a fresh microVM. The worker will control CPU, memory, disk, process count, runtime, and network access from outside the guest. It will stop the VM and remove all job state after every run.
+The Firecracker executor puts every job in a fresh microVM with no network device. The worker controls vCPU, memory, disk size, and runtime from outside the guest, then stops the VM and removes all job state after every run.
 
-The current `restricted-host-process` executor runs only `/bin/echo`, without a shell. It exists to support protocol and workspace development until the microVM executor replaces it.
+The `restricted-host-process` executor remains only as a no-KVM fallback and still permits just `echo`; general commands never run directly on the host.
 
 Protecting a workload from a worker is a separate problem. Confidential computing and remote attestation belong later in the roadmap and are not part of the initial system.
 
 ## Repository layout
 
 ```text
-cmd/yonk/          client CLI
-cmd/yonkd/         worker daemon
-internal/client/   worker protocol client
-internal/job/      portable job and event models
-internal/worker/   HTTP server and job lifecycle
-internal/executor/ executor boundary and current restricted executor
-internal/workspace workspace packaging and safe extraction
+cmd/yonk/           client CLI
+cmd/yonkd/          worker daemon
+cmd/yonk-guest/     static guest agent (initramfs init)
+internal/client/    worker protocol client
+internal/job/       portable job and event models
+internal/worker/    HTTP server and job lifecycle
+internal/executor/  executor boundary, restricted and microVM executors
+internal/workspace  workspace packaging and safe extraction
+internal/firecracker  microVM config, initramfs, and disk images
+internal/guest/     guest-side agent logic
+internal/guestproto host-guest control protocol
+internal/eventstream shared NDJSON event sink
+scripts/            worker setup
 ```
 
 ## Roadmap
 
-The immediate priority is Firecracker execution. General commands stay disabled until jobs run inside a microVM with host-enforced limits.
+The immediate priority is completing Firecracker validation on the Debian worker. General commands stay disabled until jobs run inside a microVM with host-enforced limits.
 
 See [ROADMAP.md](ROADMAP.md) for the full plan and acceptance criteria.
 
