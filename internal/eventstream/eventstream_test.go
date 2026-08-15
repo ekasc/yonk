@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ekassinghchhabra/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/job"
 )
 
 func TestSinkAndWriter(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/ekassinghchhabra/yonk/internal/guest"
+	"github.com/ekasc/yonk/internal/guest"
 )
 
 func main() {

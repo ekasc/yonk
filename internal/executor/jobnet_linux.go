@@ -12,7 +12,7 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/ekassinghchhabra/yonk/internal/firecracker"
+	"github.com/ekasc/yonk/internal/firecracker"
 )
 
 // jobNetwork owns the shared nftables table and per-job TAP devices.

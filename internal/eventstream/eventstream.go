@@ -7,7 +7,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/ekassinghchhabra/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/job"
 )
 
 // Sink serializes events to one writer, optionally flushing after each event.

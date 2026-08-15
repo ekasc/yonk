@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ekassinghchhabra/yonk/internal/eventstream"
-	"github.com/ekassinghchhabra/yonk/internal/executor"
-	"github.com/ekassinghchhabra/yonk/internal/job"
-	"github.com/ekassinghchhabra/yonk/internal/workspace"
+	"github.com/ekasc/yonk/internal/eventstream"
+	"github.com/ekasc/yonk/internal/executor"
+	"github.com/ekasc/yonk/internal/job"
+	"github.com/ekasc/yonk/internal/workspace"
 )
 
 const (

@@ -75,6 +75,6 @@ size_mb=$(du -sm --exclude=proc --exclude=sys --exclude=dev "$STAGING" | cut -f1
 image_mb=$((size_mb * 115 / 100 + 64))
 truncate -s "${image_mb}M" "$IMAGE"
 mkfs.ext4 -q -F -m 0 -d "$STAGING" "$IMAGE"
-ls -lh "$IMAGE"echo
+ls -lh "$IMAGE"
 echo "worker rootfs ready: $IMAGE"
 echo "start the daemon with: yonkd --executor microvm --rootfs $IMAGE"

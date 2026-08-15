@@ -2,7 +2,7 @@
 // agent running inside a Firecracker microVM.
 package guestproto
 
-import "github.com/ekassinghchhabra/yonk/internal/job"
+import "github.com/ekasc/yonk/internal/job"
 
 const (
 	// HostCID is the fixed virtio-vsock host context ID.

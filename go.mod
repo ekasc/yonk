@@ -1,10 +1,11 @@
-module github.com/ekassinghchhabra/yonk
+module github.com/ekasc/yonk
 
 go 1.25.0
 
 require (
 	github.com/containerd/cgroups/v3 v3.1.3
 	github.com/mdlayher/vsock v1.3.0
+	github.com/vishvananda/netlink v1.3.1
 	golang.org/x/sys v0.47.0
 )
 
@@ -16,7 +17,6 @@ require (
 	github.com/mdlayher/socket v0.6.0 // indirect
 	github.com/opencontainers/runtime-spec v1.3.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	golang.org/x/exp v0.0.0-20241108190413-2d47ceb2692f // indirect
 	golang.org/x/net v0.55.0 // indirect
