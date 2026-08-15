@@ -34,12 +34,15 @@ const (
 // FirecrackerConfig configures the Firecracker executor. All paths except
 // WorkDir are validated at startup; WorkDir must allow Unix sockets.
 type FirecrackerConfig struct {
-	BinPath     string // firecracker binary
-	KernelPath  string // guest kernel image (vmlinux)
-	RootfsPath  string // read-only base rootfs with toolchains and yonk-guest
-	WorkDir     string // per-job VM state directory
-	MaxVCPU     int    // provider ceiling per guest
-	MaxMemoryMB int    // provider ceiling per guest (MiB)
+	BinPath        string   // firecracker binary
+	KernelPath     string   // guest kernel image (vmlinux)
+	RootfsPath     string   // read-only base rootfs with toolchains and yonk-guest
+	WorkDir        string   // per-job VM state directory
+	MaxVCPU        int      // provider ceiling per guest
+	MaxMemoryMB    int      // provider ceiling per guest (MiB)
+	MaxEgressMbps  uint64   // per-job egress bandwidth ceiling (0 disables)
+	MaxEgressPPS   uint64   // per-job egress packet ceiling (0 disables)
+	GuestResolvers []string // DNS resolvers for egress jobs
 }
 
 // Firecracker executes each job inside an ephemeral Firecracker microVM.
@@ -47,6 +50,7 @@ type Firecracker struct {
 	cfg    FirecrackerConfig
 	logger *slog.Logger
 	mkfs   func(root, image string, sizeBytes int64) error
+	net    *jobNetwork
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
@@ -72,6 +76,7 @@ func NewFirecracker(cfg FirecrackerConfig, logger *slog.Logger) (*Firecracker, e
 		mkfs:    firecracker.MkfsExt4,
 		running: map[string]context.CancelFunc{},
 	}
+	f.net = newJobNetwork(cfg.MaxEgressMbps, cfg.MaxEgressPPS, cfg.GuestResolvers)
 	if err := f.preflight(); err != nil {
 		return nil, err
 	}
@@ -114,6 +119,14 @@ func (f *Firecracker) Capabilities(context.Context) ([]job.ExecutorCapability, e
 		Platform:  job.Platform{OS: "linux", Arch: "amd64"},
 		Isolation: "microvm",
 	}}, nil
+}
+
+// NetworkModes reports the network modes this worker can provide.
+func (f *Firecracker) NetworkModes() []string {
+	if f.net != nil && f.net.ready {
+		return []string{"none", "egress"}
+	}
+	return []string{"none"}
 }
 
 // Run boots a microVM, transfers the workspace, executes the job inside the
@@ -159,9 +172,35 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 	defer limits.delete()
 
 	vsockPath := filepath.Join(jobDir, "v")
+	bootArgs := "root=/dev/vda ro console=ttyS0 reboot=k panic=1 pci=off init=/usr/sbin/yonk-guest"
+	var networkInterface *firecracker.NetworkInterface
+	var jobSub *jobSubnet
+	var tapName string
+	if spec.Network == "egress" {
+		if f.net == nil || !f.net.ready {
+			if f.net != nil && f.net.err != nil {
+				return result, fmt.Errorf("job networking unavailable: %w", f.net.err)
+			}
+			return result, errors.New("job networking unavailable on this worker")
+		}
+		var err error
+		jobSub, tapName, err = f.net.setupTap(spec.ID)
+		if err != nil {
+			return result, fmt.Errorf("prepare job network: %w", err)
+		}
+		defer func() { f.net.teardownTap(tapName, jobSub) }()
+		bootArgs += " " + guestBootNetArg(jobSub, f.cfg.GuestResolvers)
+		networkInterface = &firecracker.NetworkInterface{
+			IfaceID:       "eth0",
+			HostDevName:   tapName,
+			GuestMAC:      guestMAC(jobSub.idx),
+			TxRateLimiter: f.net.rateLimiter(),
+			RxRateLimiter: f.net.rateLimiter(),
+		}
+	}
 	bootSource := firecracker.BootSource{
 		KernelImagePath: f.cfg.KernelPath,
-		BootArgs:        "root=/dev/vda ro console=ttyS0 reboot=k panic=1 pci=off init=/usr/sbin/yonk-guest",
+		BootArgs:        bootArgs,
 	}
 	drives := []firecracker.Drive{
 		{
@@ -213,7 +252,7 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 
 	apiSocket := filepath.Join(jobDir, "api.sock")
 	api := firecracker.NewApiClient(apiSocket)
-	if err := f.configureVM(jobCtx, api, apiSocket, bootSource, drives, machineConfig, vsockConfig, serialConfig); err != nil {
+	if err := f.configureVM(jobCtx, api, apiSocket, bootSource, drives, machineConfig, vsockConfig, serialConfig, networkInterface); err != nil {
 		killProcess(cmd, processExited, killGrace)
 		return result, err
 	}
@@ -270,7 +309,7 @@ func consoleTail(jobDir string) string {
 
 // configureVM waits for the API socket, applies the VM configuration, and
 // boots the guest.
-func (f *Firecracker) configureVM(ctx context.Context, api *firecracker.ApiClient, apiSocket string, bootSource firecracker.BootSource, drives []firecracker.Drive, machineConfig firecracker.MachineConfig, vsockConfig firecracker.VSock, serialConfig firecracker.Serial) error {
+func (f *Firecracker) configureVM(ctx context.Context, api *firecracker.ApiClient, apiSocket string, bootSource firecracker.BootSource, drives []firecracker.Drive, machineConfig firecracker.MachineConfig, vsockConfig firecracker.VSock, serialConfig firecracker.Serial, networkInterface *firecracker.NetworkInterface) error {
 	if err := firecracker.WaitForSocket(ctx, apiSocket); err != nil {
 		return err
 	}
@@ -287,6 +326,9 @@ func (f *Firecracker) configureVM(ctx context.Context, api *firecracker.ApiClien
 	}
 	for _, drive := range drives {
 		steps = append(steps, apiStep{path: "/drives/" + drive.DriveID, body: drive})
+	}
+	if networkInterface != nil {
+		steps = append(steps, apiStep{path: "/network-interfaces/" + networkInterface.IfaceID, body: networkInterface})
 	}
 	steps = append(steps, apiStep{path: "/actions", body: map[string]string{"action_type": "InstanceStart"}})
 	for _, step := range steps {

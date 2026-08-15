@@ -37,6 +37,16 @@ func TestRequestBodyJSON(t *testing.T) {
 			body: Serial{SerialOutPath: "/tmp/console.log"},
 			want: map[string]any{"serial_out_path": "/tmp/console.log"},
 		},
+		{
+			name: "network-interface",
+			body: NetworkInterface{IfaceID: "eth0", HostDevName: "ykabc1234", GuestMAC: "02:00:00:00:00:01",
+				TxRateLimiter: &RateLimiter{Bandwidth: &TokenBucket{Size: 12500000, RefillTime: 1000}}},
+			want: map[string]any{
+				"iface_id":      "eth0",
+				"host_dev_name": "ykabc1234",
+				"guest_mac":     "02:00:00:00:00:01",
+			},
+		},
 	}
 	for _, test := range bodies {
 		t.Run(test.name, func(t *testing.T) {

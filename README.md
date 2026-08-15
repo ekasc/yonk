@@ -29,7 +29,8 @@ Yonk is under active development. The client/server protocol and workspace trans
 | cgroup resource limits | Working |
 | Fork-bomb and memory-bomb containment | Working |
 | Real Linux workloads (go, node, pnpm, gcc) | Working |
-| Guest networking | Planned |
+| Controlled job network egress | Working |
+| Guest networking (LAN/host isolation) | Working |
 | Artifacts | Planned |
 
 Do not expose the current daemon to untrusted clients. It does not have application-level authentication yet, and the restricted executor is not a security boundary.
@@ -170,6 +171,17 @@ Add exclusions before `--`:
 ```
 
 The worker rejects absolute paths, path traversal, unsafe symlinks, duplicate paths, special files, oversized archives, and excessive file counts during extraction.
+
+## Job networking
+
+Jobs have **no network access by default**. For workloads that need to reach the internet (installs, module downloads):
+
+```bash
+./yonk run debian --network egress -- pnpm install
+./yonk run debian --network egress -- go mod download
+```
+
+Egress is controlled and minimal: jobs reach public destinations only. Host-side nftables rules drop all inbound traffic from job taps (jobs cannot reach the worker's SSH, yonkd, or other services) and drop private, CGNAT (Tailscale), link-local, and reserved destinations (jobs cannot reach the provider LAN or other tailnet machines). IPv6 is disabled, each job gets an isolated /30 and TAP, and the worker rate-limits per-job bandwidth and packets (`--max-egress-mbps`, `--max-egress-pps`). The worker also provisions the guest's resolver (`--guest-resolver`).
 
 ## Protocol
 

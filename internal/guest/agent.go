@@ -66,6 +66,12 @@ func Run(log io.Writer) error {
 		return fmt.Errorf("expected job message, got %q", msg.Type)
 	}
 
+	if msg.Job.Network == "egress" {
+		if err := setupResolvConf(); err != nil {
+			fmt.Fprintf(logSink, "yonk-guest: resolv.conf setup failed: %v\n", err)
+		}
+	}
+
 	if err := mountWorkspace(); err != nil {
 		sendResult(enc, guestproto.Result{
 			ExitCode:          137,

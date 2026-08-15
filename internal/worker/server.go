@@ -230,6 +230,9 @@ func decodeJobPart(part io.Reader) (job.RunRequest, error) {
 	decoder.DisallowUnknownFields()
 	var request job.RunRequest
 	if err := decoder.Decode(&request); err != nil {
+		if strings.Contains(err.Error(), "json: unknown field") {
+			return job.RunRequest{}, fmt.Errorf("job field contains a field this worker does not support (worker is older than the client): %v", err)
+		}
 		return job.RunRequest{}, errors.New("job field is not valid Yonk JSON")
 	}
 	if err := ensureEOF(decoder); err != nil {

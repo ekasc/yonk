@@ -55,6 +55,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "yonk: %v\n", err)
 		return clientFailureExitCode
 	}
+	network := options.network
+	if network != "" && !containsString(info.NetworkModes, network) {
+		fmt.Fprintf(stderr, "yonk: worker does not support network mode %q (supported: %v)\n", network, info.NetworkModes)
+		return clientFailureExitCode
+	}
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "yonk: identify workspace: %v\n", err)
@@ -89,6 +94,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Platform:       info.Executors[0].Platform,
 		Resources:      job.Resources{CPU: options.cpu, MemoryMB: options.memoryMB, DiskMB: options.diskMB},
 		TimeoutSeconds: options.timeoutSeconds,
+		Network:        network,
 	}
 	result, err := protocolClient.Run(ctx, spec, archiveFile, func(event job.Event) error {
 		switch event.Type {
@@ -126,6 +132,7 @@ type runOptions struct {
 	memoryMB         int
 	diskMB           int
 	timeoutSeconds   int
+	network          string
 }
 
 func defaultRunOptions() runOptions {
@@ -178,6 +185,17 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 				return "", "", nil, runOptions{}, err
 			}
 			index++
+		case "--network":
+			if index+1 >= len(args) {
+				return "", "", nil, runOptions{}, errors.New("--network requires a value")
+			}
+			switch args[index+1] {
+			case "none", "egress":
+				options.network = args[index+1]
+			default:
+				return "", "", nil, runOptions{}, fmt.Errorf("--network must be none or egress")
+			}
+			index++
 		default:
 			return "", "", nil, runOptions{}, fmt.Errorf("unknown run option %q", args[index])
 		}
@@ -199,6 +217,15 @@ func parseRunInt(args []string, index int, flag string, min, max int) (int, erro
 	return value, nil
 }
 
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: yonk run <worker-endpoint> [options] -- <command> [args...]")
 	fmt.Fprintln(w, "options:")
@@ -208,4 +235,5 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --memory-mb <n>         requested memory MiB (default 1024)")
 	fmt.Fprintln(w, "  --disk-mb <n>           requested workspace disk MiB (default 8192)")
 	fmt.Fprintln(w, "  --timeout <secs>        job timeout, 1-300 (default 60)")
+	fmt.Fprintln(w, "  --network <mode>         none or egress (default none)")
 }

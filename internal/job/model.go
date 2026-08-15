@@ -47,6 +47,7 @@ type Job struct {
 	Resources      Resources `json:"resources"`
 	TimeoutSeconds int       `json:"timeout_seconds"`
 	Artifacts      []string  `json:"artifacts,omitempty"`
+	Network        string    `json:"network,omitempty"`
 }
 
 // Validate rejects malformed or unsupported protocol input.
@@ -88,6 +89,11 @@ func (j Job) Validate() error {
 	if len(j.Artifacts) != 0 {
 		return errors.New("milestone 1 does not support artifacts")
 	}
+	switch j.Network {
+	case "", "none", "egress":
+	default:
+		return fmt.Errorf("unsupported network mode %q (use none or egress)", j.Network)
+	}
 	return nil
 }
 
@@ -119,10 +125,11 @@ type ExecutorCapability struct {
 
 // WorkerInfo is the worker capability response.
 type WorkerInfo struct {
-	Name      string               `json:"name"`
-	Host      Platform             `json:"host"`
-	Resources ResourceSnapshot     `json:"resources"`
-	Executors []ExecutorCapability `json:"executors"`
+	Name         string               `json:"name"`
+	Host         Platform             `json:"host"`
+	Resources    ResourceSnapshot     `json:"resources"`
+	Executors    []ExecutorCapability `json:"executors"`
+	NetworkModes []string             `json:"network_modes,omitempty"`
 }
 
 // EventType identifies a streamed job event.

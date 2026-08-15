@@ -43,19 +43,26 @@ func run() error {
 	vmWorkDir := flag.String("vm-work-dir", os.TempDir(), "directory for per-job VM state")
 	maxVCPU := flag.Int("max-vcpu", 4, "maximum vCPUs per microVM")
 	maxMemoryMB := flag.Int("max-memory-mb", 4096, "maximum memory MiB per microVM")
+	maxEgressMbps := flag.Uint64("max-egress-mbps", 100, "per-job egress bandwidth ceiling in Mbit/s (0 disables the limiter)")
+	maxEgressPPS := flag.Uint64("max-egress-pps", 10000, "per-job egress packet ceiling in packets/s (0 disables the limiter)")
+	guestResolver := flag.String("guest-resolver", "1.1.1.1,9.9.9.9", "comma-separated DNS resolvers for egress jobs")
 	flag.Parse()
 
+	resolvers := strings.Split(*guestResolver, ",")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	var exec executor.Executor
 	switch *executorMode {
 	case "microvm":
 		exec, err = executor.NewFirecracker(executor.FirecrackerConfig{
-			BinPath:     *firecrackerBin,
-			KernelPath:  *kernelImage,
-			RootfsPath:  *rootfsImage,
-			WorkDir:     *vmWorkDir,
-			MaxVCPU:     *maxVCPU,
-			MaxMemoryMB: *maxMemoryMB,
+			BinPath:        *firecrackerBin,
+			KernelPath:     *kernelImage,
+			RootfsPath:     *rootfsImage,
+			WorkDir:        *vmWorkDir,
+			MaxVCPU:        *maxVCPU,
+			MaxMemoryMB:    *maxMemoryMB,
+			MaxEgressMbps:  *maxEgressMbps,
+			MaxEgressPPS:   *maxEgressPPS,
+			GuestResolvers: resolvers,
 		}, logger)
 		if err != nil {
 			return fmt.Errorf("microvm executor: %w", err)
@@ -64,12 +71,15 @@ func run() error {
 		exec = executor.NewRestricted()
 	case "auto":
 		exec, err = executor.NewFirecracker(executor.FirecrackerConfig{
-			BinPath:     *firecrackerBin,
-			KernelPath:  *kernelImage,
-			RootfsPath:  *rootfsImage,
-			WorkDir:     *vmWorkDir,
-			MaxVCPU:     *maxVCPU,
-			MaxMemoryMB: *maxMemoryMB,
+			BinPath:        *firecrackerBin,
+			KernelPath:     *kernelImage,
+			RootfsPath:     *rootfsImage,
+			WorkDir:        *vmWorkDir,
+			MaxVCPU:        *maxVCPU,
+			MaxMemoryMB:    *maxMemoryMB,
+			MaxEgressMbps:  *maxEgressMbps,
+			MaxEgressPPS:   *maxEgressPPS,
+			GuestResolvers: resolvers,
 		}, logger)
 		if err != nil {
 			logger.Warn("microvm executor unavailable; falling back to restricted", "error", err)
@@ -93,6 +103,9 @@ func run() error {
 			MemoryAvailableMB: memoryAvailable,
 		},
 		Executors: capabilities,
+	}
+	if provider, ok := exec.(interface{ NetworkModes() []string }); ok {
+		info.NetworkModes = provider.NetworkModes()
 	}
 	protocolServer, err := worker.NewServer(info, exec, logger, *maxConcurrent)
 	if err != nil {

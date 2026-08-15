@@ -32,6 +32,8 @@ func TestJobValidate(t *testing.T) {
 		{name: "invalid resources", mutate: func(j *Job) { j.Resources.CPU = 0 }, want: "must be positive"},
 		{name: "invalid timeout", mutate: func(j *Job) { j.TimeoutSeconds = 0 }, want: "timeout_seconds"},
 		{name: "artifacts", mutate: func(j *Job) { j.Artifacts = []string{"out.txt"} }, want: "does not support artifacts"},
+		{name: "network invalid", mutate: func(j *Job) { j.Network = "public" }, want: "unsupported network mode"},
+		{name: "network egress", mutate: func(j *Job) { j.Network = "egress" }},
 	}
 
 	for _, test := range tests {
