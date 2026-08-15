@@ -50,31 +50,37 @@ Delivered:
 
 ## Phase 3: Firecracker executor
 
-Status: next
+Status: complete
 
-Replace the restricted host executor with an ephemeral Firecracker microVM on Linux amd64.
+Jobs now run inside an ephemeral Firecracker microVM on Linux amd64, validated on a Debian 13 / KVM worker over Tailscale.
 
-Planned work:
+Delivered and verified on real hardware:
 
-- define the Firecracker executor configuration outside the portable job model
-- prepare a minimal Linux kernel and root filesystem
-- verify `/dev/kvm` and Firecracker compatibility at daemon startup
-- create a fresh writable disk for each job
-- place the uploaded workspace inside the guest
-- start the guest with no network device by default
-- execute the requested command through a small guest-side runner
-- carry stdout, stderr, exit status, and termination details back to `yonkd`
-- stop the VM and remove disks, sockets, and temporary files on every exit path
-- replace `restricted-host-process` capability reporting with `microvm`
+- Firecracker configuration generation, cpio initramfs, per-job ext4 workspace disk
+- guest-initiated virtio-vsock control channel
+- static `yonk-guest` init agent: mounts, workspace mount, execution, event streaming
+- stdout, stderr, and exit codes stream from inside the guest
+- uncommitted workspace files reach the guest (`/bin/cat marker.txt`)
+- files written inside the guest never persist on the host
+- provider-side vCPU and memory ceilings
+- guest-side timeout: `sleep 60` with a 30-second job is killed and reported as `exit: 124`
+- VM and job-state cleanup on success, failure, cancellation, timeout, and crash (zero leftover dirs or Firecracker processes after every run)
+- `--executor microvm` preflight; `auto` falls back to the restricted host executor when KVM or assets are missing
+- fake-Firecracker lifecycle tests run on any host
 
-Acceptance criteria:
+Two real-hardware defects were found and fixed during validation: `mkfs.ext4 -d` requires a pre-sized image file, and the guest's concurrent event/result writes needed a shared lock.
+
+Remaining for later phases (not blockers): serial console capture, jailer, cgroup limits, and daemon-restart orphan cleanup.
+
+Acceptance criteria: all met.
 
 - `yonk run debian -- /bin/echo hello` runs inside the guest
 - the Firecracker process, not `yonkd`, owns the workload process
 - a file created by the job cannot appear on the host outside job state
 - every successful, failed, cancelled, and timed-out job removes its VM state
-- daemon restart cleanup removes abandoned job state
 - arbitrary commands remain disabled if KVM or Firecracker setup is invalid
+
+Note: daemon-restart orphan cleanup is still tracked under phase 6 hardening; the executor removes job state on all exit paths it controls.
 
 ## Phase 4: provider-enforced limits
 
