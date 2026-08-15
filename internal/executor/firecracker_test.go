@@ -112,19 +112,17 @@ func newTestFirecracker(t *testing.T) *Firecracker {
 	}
 	return &Firecracker{
 		cfg: FirecrackerConfig{
-			BinPath:        buildFakeFirecracker(t),
-			KernelPath:     filepath.Join(t.TempDir(), "vmlinux.bin"),
-			GuestAgentPath: writeStubBinary(t, "guest-agent"),
-			BusyboxPath:    writeStubBinary(t, "busybox"),
-			WorkDir:        workDir,
-			MaxVCPU:        2,
-			MaxMemoryMB:    1024,
+			BinPath:     buildFakeFirecracker(t),
+			KernelPath:  filepath.Join(t.TempDir(), "vmlinux.bin"),
+			RootfsPath:  writeStubBinary(t, "rootfs.ext4"),
+			WorkDir:     workDir,
+			MaxVCPU:     2,
+			MaxMemoryMB: 1024,
 		},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mkfs: func(root, image string, _ int64) error {
 			return os.WriteFile(image, []byte("fake-ext4"), 0o600)
 		},
-		applets: func() ([]string, error) { return []string{"sh", "echo"}, nil },
 		running: map[string]context.CancelFunc{},
 	}
 }

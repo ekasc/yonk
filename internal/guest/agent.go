@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 )
 
 const (
-	workspaceDevice = "/dev/vda"
+	workspaceDevice = "/dev/vdb"
 	workspaceMount  = "/workspace"
 )
 
@@ -37,10 +38,11 @@ func Run(log io.Writer) error {
 	if err := enablePidsLimit(); err != nil {
 		fmt.Fprintf(logSink, "yonk-guest: pids limit unavailable: %v\n", err)
 	}
-	os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-	if err := os.MkdirAll("/root", 0o700); err != nil {
-		return fmt.Errorf("create /root: %w", err)
+	os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	if err := os.MkdirAll("/tmp/home", 0o700); err != nil {
+		return fmt.Errorf("create /tmp/home: %w", err)
 	}
+	os.Setenv("HOME", "/tmp/home")
 
 	conn, err := dialHost()
 	if err != nil {
@@ -122,9 +124,10 @@ func runJob(spec *job.Job, enc *lockedEncoder, dec *json.Decoder, log io.Writer)
 	cmd := exec.CommandContext(ctx, commandPath, spec.Args...)
 	cmd.Dir = workspaceMount
 	cmd.Env = []string{
-		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-		"HOME=/root",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=/tmp/home",
 		"TERM=xterm",
+		"LANG=C.UTF-8",
 		"PWD=" + workspaceMount,
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -150,6 +153,10 @@ func runJob(spec *job.Job, enc *lockedEncoder, dec *json.Decoder, log io.Writer)
 		sendResult(enc, result)
 		return nil
 	}
+
+	var peakBytes atomic.Int64
+	stopSampler := make(chan struct{})
+	go samplePeakMemory(&peakBytes, cmd.Process.Pid, stopSampler)
 
 	cancelCh := make(chan struct{})
 	go watchCancellation(dec, cancelCh)
@@ -180,6 +187,7 @@ func runJob(spec *job.Job, enc *lockedEncoder, dec *json.Decoder, log io.Writer)
 	}()
 
 	runErr := cmd.Wait()
+	close(stopSampler)
 	copyWG.Wait()
 
 	// A shell may exit while its background children keep running (a fork
@@ -188,6 +196,7 @@ func runJob(spec *job.Job, enc *lockedEncoder, dec *json.Decoder, log io.Writer)
 	reapOrphans(ctx, killGroup)
 
 	result.DurationMillis = time.Since(start).Milliseconds()
+	result.PeakMemoryBytes = peakBytes.Load()
 	if cmd.ProcessState != nil {
 		result.CPUTimeMillis = cmd.ProcessState.UserTime().Milliseconds() + cmd.ProcessState.SystemTime().Milliseconds()
 		if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {

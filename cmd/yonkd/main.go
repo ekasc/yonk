@@ -39,8 +39,7 @@ func run() error {
 	executorMode := flag.String("executor", "auto", "executor: auto, restricted, or microvm")
 	firecrackerBin := flag.String("firecracker-bin", "/opt/yonk/firecracker", "path to the firecracker binary")
 	kernelImage := flag.String("kernel", "/opt/yonk/vmlinux.bin", "path to the guest kernel image")
-	guestAgentBin := flag.String("guest-agent", "/opt/yonk/yonk-guest", "path to the static yonk-guest binary")
-	busyboxBin := flag.String("busybox", "/opt/yonk/busybox", "path to a static busybox binary")
+	rootfsImage := flag.String("rootfs", "/opt/yonk/rootfs.ext4", "path to the read-only guest rootfs image")
 	vmWorkDir := flag.String("vm-work-dir", os.TempDir(), "directory for per-job VM state")
 	maxVCPU := flag.Int("max-vcpu", 4, "maximum vCPUs per microVM")
 	maxMemoryMB := flag.Int("max-memory-mb", 4096, "maximum memory MiB per microVM")
@@ -51,13 +50,12 @@ func run() error {
 	switch *executorMode {
 	case "microvm":
 		exec, err = executor.NewFirecracker(executor.FirecrackerConfig{
-			BinPath:        *firecrackerBin,
-			KernelPath:     *kernelImage,
-			GuestAgentPath: *guestAgentBin,
-			BusyboxPath:    *busyboxBin,
-			WorkDir:        *vmWorkDir,
-			MaxVCPU:        *maxVCPU,
-			MaxMemoryMB:    *maxMemoryMB,
+			BinPath:     *firecrackerBin,
+			KernelPath:  *kernelImage,
+			RootfsPath:  *rootfsImage,
+			WorkDir:     *vmWorkDir,
+			MaxVCPU:     *maxVCPU,
+			MaxMemoryMB: *maxMemoryMB,
 		}, logger)
 		if err != nil {
 			return fmt.Errorf("microvm executor: %w", err)
@@ -66,13 +64,12 @@ func run() error {
 		exec = executor.NewRestricted()
 	case "auto":
 		exec, err = executor.NewFirecracker(executor.FirecrackerConfig{
-			BinPath:        *firecrackerBin,
-			KernelPath:     *kernelImage,
-			GuestAgentPath: *guestAgentBin,
-			BusyboxPath:    *busyboxBin,
-			WorkDir:        *vmWorkDir,
-			MaxVCPU:        *maxVCPU,
-			MaxMemoryMB:    *maxMemoryMB,
+			BinPath:     *firecrackerBin,
+			KernelPath:  *kernelImage,
+			RootfsPath:  *rootfsImage,
+			WorkDir:     *vmWorkDir,
+			MaxVCPU:     *maxVCPU,
+			MaxMemoryMB: *maxMemoryMB,
 		}, logger)
 		if err != nil {
 			logger.Warn("microvm executor unavailable; falling back to restricted", "error", err)

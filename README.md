@@ -28,6 +28,8 @@ Yonk is under active development. The client/server protocol and workspace trans
 | Job timeout | Working |
 | cgroup resource limits | Working |
 | Fork-bomb and memory-bomb containment | Working |
+| Real Linux workloads (go, node, pnpm, gcc) | Working |
+| Guest networking | Planned |
 | Artifacts | Planned |
 
 Do not expose the current daemon to untrusted clients. It does not have application-level authentication yet, and the restricted executor is not a security boundary.
@@ -86,13 +88,14 @@ GOOS=linux GOARCH=amd64 go build -o bin/yonkd-linux-amd64 ./cmd/yonkd
 
 ## Worker setup
 
-On the Debian worker, install the microVM assets with the setup script (run from the repository root as root):
+On the Debian worker, install the core assets and build the toolchain rootfs (run from the repository root as root):
 
 ```bash
-sudo ./scripts/setup-worker.sh
+sudo ./scripts/setup-worker.sh    # Firecracker, kernel, yonk-guest agent
+sudo ./scripts/build-rootfs.sh    # read-only rootfs with Go, Node, pnpm, gcc, git, make
 ```
 
-The script downloads Firecracker, a guest kernel, and a static busybox into `/opt/yonk`, and cross-builds the static `yonk-guest` agent from this repository. It requires `curl`, `tar`, `go`, `e2fsprogs` (for `mkfs.ext4`), and `/dev/kvm`.
+The setup script downloads Firecracker and a guest kernel into `/opt/yonk` and builds the static `yonk-guest` agent. The rootfs script debootstraps a minimal Debian, installs the toolchains, bakes the agent in, and writes `/opt/yonk/rootfs.ext4` (immutable and shared across jobs). It requires `curl`, `tar`, `go`, `debootstrap`, `e2fsprogs`, and `/dev/kvm`. After toolchain changes, `sudo ./scripts/rebake-rootfs.sh <staging>` refreshes the image without re-running debootstrap.
 
 Start `yonkd` with the microVM executor:
 
@@ -101,8 +104,7 @@ sudo yonkd --executor microvm \
   --listen 100.x.y.z:9665 \
   --firecracker-bin /opt/yonk/firecracker \
   --kernel /opt/yonk/vmlinux.bin \
-  --guest-agent /opt/yonk/yonk-guest \
-  --busybox /opt/yonk/busybox
+  --rootfs /opt/yonk/rootfs.ext4
 ```
 
 The default is `--executor auto`, which uses the microVM executor when KVM and all assets are available and falls back to the restricted host executor otherwise. `--executor microvm` fails loudly instead of falling back.

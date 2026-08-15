@@ -110,26 +110,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return clientFailureExitCode
 	}
+	fmt.Fprintf(stdout, "duration: %.1fs\n", float64(result.DurationMillis)/1000)
+	if result.PeakMemoryBytes > 0 {
+		fmt.Fprintf(stdout, "peak memory: %.1f MB\n", float64(result.PeakMemoryBytes)/(1<<20))
+	}
 	fmt.Fprintf(stdout, "exit: %d\n", result.ExitCode)
 	return result.ExitCode
 }
 
 // runOptions carries resource requests and workspace exclusions.
 type runOptions struct {
-	exclusions     []string
-	cpu            int
-	memoryMB       int
-	diskMB         int
-	timeoutSeconds int
+	exclusions       []string
+	noDefaultExclude bool
+	cpu              int
+	memoryMB         int
+	diskMB           int
+	timeoutSeconds   int
 }
 
 func defaultRunOptions() runOptions {
 	return runOptions{
 		exclusions:     workspace.DefaultExclusions(),
-		cpu:            1,
-		memoryMB:       128,
+		cpu:            2,
+		memoryMB:       1024,
 		diskMB:         8192,
-		timeoutSeconds: 30,
+		timeoutSeconds: 60,
 	}
 }
 
@@ -150,6 +155,9 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 			}
 			options.exclusions = append(options.exclusions, args[index+1])
 			index++
+		case "--no-default-excludes":
+			options.noDefaultExclude = true
+			options.exclusions = nil
 		case "--cpu":
 			if options.cpu, err = parseRunInt(args, index, "--cpu", 1, 1024); err != nil {
 				return "", "", nil, runOptions{}, err
@@ -194,9 +202,10 @@ func parseRunInt(args []string, index int, flag string, min, max int) (int, erro
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: yonk run <worker-endpoint> [options] -- <command> [args...]")
 	fmt.Fprintln(w, "options:")
-	fmt.Fprintln(w, "  --exclude <path>   exclude a path from the workspace (repeatable)")
-	fmt.Fprintln(w, "  --cpu <n>          requested vCPUs (default 1)")
-	fmt.Fprintln(w, "  --memory-mb <n>    requested memory MiB (default 128)")
-	fmt.Fprintln(w, "  --disk-mb <n>      requested workspace disk MiB (default 8192)")
-	fmt.Fprintln(w, "  --timeout <secs>   job timeout, 1-300 (default 30)")
+	fmt.Fprintln(w, "  --exclude <path>        exclude a path from the workspace (repeatable)")
+	fmt.Fprintln(w, "  --no-default-excludes   transfer everything, including node_modules and build dirs")
+	fmt.Fprintln(w, "  --cpu <n>               requested vCPUs (default 2)")
+	fmt.Fprintln(w, "  --memory-mb <n>         requested memory MiB (default 1024)")
+	fmt.Fprintln(w, "  --disk-mb <n>           requested workspace disk MiB (default 8192)")
+	fmt.Fprintln(w, "  --timeout <secs>        job timeout, 1-300 (default 60)")
 }

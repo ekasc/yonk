@@ -34,29 +34,22 @@ const (
 // FirecrackerConfig configures the Firecracker executor. All paths except
 // WorkDir are validated at startup; WorkDir must allow Unix sockets.
 type FirecrackerConfig struct {
-	BinPath        string // firecracker binary
-	KernelPath     string // guest kernel image (vmlinux)
-	GuestAgentPath string // static yonk-guest binary
-	BusyboxPath    string // static busybox binary
-	WorkDir        string // per-job VM state directory
-	MaxVCPU        int    // provider ceiling per guest
-	MaxMemoryMB    int    // provider ceiling per guest (MiB)
+	BinPath     string // firecracker binary
+	KernelPath  string // guest kernel image (vmlinux)
+	RootfsPath  string // read-only base rootfs with toolchains and yonk-guest
+	WorkDir     string // per-job VM state directory
+	MaxVCPU     int    // provider ceiling per guest
+	MaxMemoryMB int    // provider ceiling per guest (MiB)
 }
 
 // Firecracker executes each job inside an ephemeral Firecracker microVM.
 type Firecracker struct {
-	cfg     FirecrackerConfig
-	logger  *slog.Logger
-	mkfs    func(root, image string, sizeBytes int64) error
-	applets func() ([]string, error)
+	cfg    FirecrackerConfig
+	logger *slog.Logger
+	mkfs   func(root, image string, sizeBytes int64) error
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
-}
-
-var minimalApplets = []string{
-	"sh", "echo", "ls", "cat", "rm", "mkdir", "cp", "mv",
-	"grep", "sleep", "true", "false", "mount", "umount",
 }
 
 // NewFirecracker validates the environment and returns a ready executor.
@@ -77,7 +70,6 @@ func NewFirecracker(cfg FirecrackerConfig, logger *slog.Logger) (*Firecracker, e
 		cfg:     cfg,
 		logger:  logger,
 		mkfs:    firecracker.MkfsExt4,
-		applets: func() ([]string, error) { return listApplets(cfg.BusyboxPath) },
 		running: map[string]context.CancelFunc{},
 	}
 	if err := f.preflight(); err != nil {
@@ -86,25 +78,8 @@ func NewFirecracker(cfg FirecrackerConfig, logger *slog.Logger) (*Firecracker, e
 	return f, nil
 }
 
-func listApplets(busyboxPath string) ([]string, error) {
-	out, err := exec.Command(busyboxPath, "--list").Output()
-	if err != nil {
-		return append([]string(nil), minimalApplets...), nil
-	}
-	var applets []string
-	for _, line := range bytes.Split(bytes.TrimSpace(out), []byte("\n")) {
-		if name := string(line); name != "" && name != "busybox" {
-			applets = append(applets, name)
-		}
-	}
-	if len(applets) == 0 {
-		return append([]string(nil), minimalApplets...), nil
-	}
-	return applets, nil
-}
-
 func (f *Firecracker) preflight() error {
-	for _, path := range []string{f.cfg.BinPath, f.cfg.KernelPath, f.cfg.GuestAgentPath, f.cfg.BusyboxPath} {
+	for _, path := range []string{f.cfg.BinPath, f.cfg.KernelPath, f.cfg.RootfsPath} {
 		info, err := os.Stat(path)
 		if err != nil {
 			return fmt.Errorf("microvm asset %q: %w", path, err)
@@ -172,15 +147,6 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 		return result, fmt.Errorf("prepare workspace disk: %w", err)
 	}
 
-	applets, err := f.applets()
-	if err != nil {
-		return result, fmt.Errorf("enumerate busybox applets: %w", err)
-	}
-	initramfsPath := filepath.Join(jobDir, "initramfs.cpio")
-	if err := firecracker.BuildInitramfs(f.cfg.GuestAgentPath, f.cfg.BusyboxPath, applets, initramfsPath); err != nil {
-		return result, fmt.Errorf("build initramfs: %w", err)
-	}
-
 	vcpu := clampInt(spec.Resources.CPU, 1, f.cfg.MaxVCPU)
 	memoryMB := clampInt(spec.Resources.MemoryMB, 128, f.cfg.MaxMemoryMB)
 
@@ -195,15 +161,22 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 	vsockPath := filepath.Join(jobDir, "v")
 	bootSource := firecracker.BootSource{
 		KernelImagePath: f.cfg.KernelPath,
-		InitrdPath:      initramfsPath,
-		BootArgs:        "console=ttyS0 reboot=k panic=1 pci=off",
+		BootArgs:        "root=/dev/vda ro console=ttyS0 reboot=k panic=1 pci=off init=/usr/sbin/yonk-guest",
 	}
-	drives := []firecracker.Drive{{
-		DriveID:      "workspace",
-		PathOnHost:   workspaceImage,
-		IsRootDevice: false,
-		IsReadOnly:   false,
-	}}
+	drives := []firecracker.Drive{
+		{
+			DriveID:      "rootfs",
+			PathOnHost:   f.cfg.RootfsPath,
+			IsRootDevice: true,
+			IsReadOnly:   true,
+		},
+		{
+			DriveID:      "workspace",
+			PathOnHost:   workspaceImage,
+			IsRootDevice: false,
+			IsReadOnly:   false,
+		},
+	}
 	machineConfig := firecracker.MachineConfig{
 		VCPUCount:  vcpu,
 		MemSizeMiB: memoryMB,
@@ -310,6 +283,7 @@ func (f *Firecracker) configureVM(ctx context.Context, api *firecracker.ApiClien
 		{"/machine-config", machineConfig},
 		{"/vsock", vsockConfig},
 		{"/serial", serialConfig},
+		{"/entropy", struct{}{}},
 	}
 	for _, drive := range drives {
 		steps = append(steps, apiStep{path: "/drives/" + drive.DriveID, body: drive})
@@ -389,6 +363,7 @@ func (f *Firecracker) readGuest(jobCtx context.Context, conn net.Conn, spec job.
 			result.ExitCode = msg.Result.ExitCode
 			result.TerminationReason = msg.Result.TerminationReason
 			result.CPUTimeMillis = msg.Result.CPUTimeMillis
+			result.PeakMemoryBytes = msg.Result.PeakMemoryBytes
 			result.DurationMillis = time.Since(started).Milliseconds()
 			if msg.Result.Message != "" {
 				f.logger.Warn("guest reported a problem", "job_id", spec.ID, "message", msg.Result.Message)

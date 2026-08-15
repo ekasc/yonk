@@ -38,5 +38,6 @@ type Result struct {
 	TerminationReason string `json:"termination_reason"`
 	DurationMillis    int64  `json:"duration_ms,omitempty"`
 	CPUTimeMillis     int64  `json:"cpu_time_ms,omitempty"`
+	PeakMemoryBytes   int64  `json:"peak_memory_bytes,omitempty"`
 	Message           string `json:"message,omitempty"`
 }

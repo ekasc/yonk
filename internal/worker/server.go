@@ -216,6 +216,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		"job_id", request.Job.ID,
 		"exit_code", result.ExitCode,
 		"duration_ms", result.DurationMillis,
+		"cpu_time_ms", result.CPUTimeMillis,
+		"peak_memory_bytes", result.PeakMemoryBytes,
+		"bytes_uploaded", result.BytesUploaded,
+		"bytes_downloaded", result.BytesDownloaded,
 		"termination_reason", result.TerminationReason,
 	)
 	_ = sink.Emit(job.Event{Type: job.EventCompletion, Result: &result})
