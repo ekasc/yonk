@@ -49,6 +49,22 @@ func TestTapNameDeterministicAndShort(t *testing.T) {
 	}
 }
 
+func TestFcAPISockFromCmdline(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"firecracker", "--api-sock", "/tmp/vm-1/api.sock"}, want: "/tmp/vm-1/api.sock"},
+		{args: []string{"firecracker", "--config-file", "/tmp/x.json"}, want: ""},
+		{args: []string{"firecracker"}, want: ""},
+	}
+	for _, test := range cases {
+		if got := fcAPISockFromCmdline(test.args); got != test.want {
+			t.Fatalf("fcAPISockFromCmdline(%v) = %q, want %q", test.args, got, test.want)
+		}
+	}
+}
+
 func TestGuestBootNetArg(t *testing.T) {
 	sub := subnetForIndex(0)
 	arg := guestBootNetArg(sub, []string{"1.1.1.1", "9.9.9.9"})

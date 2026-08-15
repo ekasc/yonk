@@ -39,7 +39,7 @@ func (e *Restricted) Capabilities(context.Context) ([]job.ExecutorCapability, er
 }
 
 // Run executes /bin/echo without invoking a shell.
-func (e *Restricted) Run(ctx context.Context, spec job.Job, work workspace.Workspace, stdout, stderr io.Writer) (job.Result, error) {
+func (e *Restricted) Run(ctx context.Context, spec job.Job, work workspace.Workspace, stdout, stderr io.Writer, _ func(name string, data []byte) error) (job.Result, error) {
 	started := time.Now().UTC()
 	result := job.Result{StartedAt: started, TerminationReason: "executor_error"}
 

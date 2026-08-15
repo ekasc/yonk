@@ -77,6 +77,9 @@ func NewFirecracker(cfg FirecrackerConfig, logger *slog.Logger) (*Firecracker, e
 		running: map[string]context.CancelFunc{},
 	}
 	f.net = newJobNetwork(cfg.MaxEgressMbps, cfg.MaxEgressPPS, cfg.GuestResolvers)
+	// Remove state left by a daemon that died mid-job (job dirs, cgroups,
+	// taps) while never touching state owned by a live VM.
+	sweepOrphans(cfg.WorkDir, logger)
 	if err := f.preflight(); err != nil {
 		return nil, err
 	}
@@ -131,7 +134,7 @@ func (f *Firecracker) NetworkModes() []string {
 
 // Run boots a microVM, transfers the workspace, executes the job inside the
 // guest, and tears everything down.
-func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Workspace, stdout, stderr io.Writer) (job.Result, error) {
+func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Workspace, stdout, stderr io.Writer, artifacts func(name string, data []byte) error) (job.Result, error) {
 	started := time.Now().UTC()
 	result := job.Result{StartedAt: started, TerminationReason: "executor_error"}
 	if work.Root == "" {
@@ -283,7 +286,7 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 		}
 	}()
 
-	result, runErr := f.readGuest(jobCtx, conn, spec, stdout, stderr, result, started)
+	result, runErr := f.readGuest(jobCtx, conn, spec, stdout, stderr, artifacts, result, started)
 	close(readDone)
 	killProcess(cmd, processExited, killGrace)
 	if runErr != nil {
@@ -370,7 +373,7 @@ func (f *Firecracker) acceptGuest(jobCtx context.Context, cmd *exec.Cmd, listene
 	}
 }
 
-func (f *Firecracker) readGuest(jobCtx context.Context, conn net.Conn, spec job.Job, stdout, stderr io.Writer, result job.Result, started time.Time) (job.Result, error) {
+func (f *Firecracker) readGuest(jobCtx context.Context, conn net.Conn, spec job.Job, stdout, stderr io.Writer, artifacts func(name string, data []byte) error, result job.Result, started time.Time) (job.Result, error) {
 	dec := json.NewDecoder(conn)
 	for {
 		var msg guestproto.Message
@@ -397,6 +400,16 @@ func (f *Firecracker) readGuest(jobCtx context.Context, conn net.Conn, spec job.
 		case guestproto.MsgStderr:
 			if _, err := stderr.Write(msg.Data); err != nil {
 				return result, fmt.Errorf("write guest stderr: %w", err)
+			}
+		case guestproto.MsgArtifact:
+			if msg.Name == "" || msg.Name != filepath.Base(msg.Name) {
+				f.logger.Warn("guest sent an unsafe artifact name", "job_id", spec.ID, "name", msg.Name)
+				continue
+			}
+			if artifacts != nil {
+				if err := artifacts(msg.Name, msg.Data); err != nil {
+					return result, fmt.Errorf("collect artifact %q: %w", msg.Name, err)
+				}
 			}
 		case guestproto.MsgResult:
 			if msg.Result == nil {
@@ -532,6 +545,10 @@ func clampInt(value, min, max int) int {
 
 // workspaceImageSize computes the disk image size from the workspace bytes
 // and the job's disk request. The provider's request cap always wins.
+// workspaceImageSize computes the disk image size from the workspace bytes
+// and the job's disk request. The image honors the request (the file is
+// sparse, so only content and metadata consume host disk) so build workloads
+// have room for node_modules, caches, and outputs.
 func workspaceImageSize(contentBytes, requestedDiskMB int64) int64 {
 	const minImageBytes = 16 << 20
 	if contentBytes < 0 {
@@ -544,7 +561,7 @@ func workspaceImageSize(contentBytes, requestedDiskMB int64) int64 {
 	if requestedDiskMB < 1 {
 		requestedDiskMB = 64
 	}
-	if max := requestedDiskMB << 20; size > max {
+	if max := requestedDiskMB << 20; size < max {
 		size = max
 	}
 	return size

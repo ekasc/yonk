@@ -78,6 +78,17 @@ func guestMAC(idx uint32) string {
 	return fmt.Sprintf("02:00:00:00:%02x:%02x", byte(idx>>8), byte(idx&0xff))
 }
 
+// fcAPISockFromCmdline extracts the --api-sock value from a Firecracker
+// process's cmdline arguments.
+func fcAPISockFromCmdline(args []string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--api-sock" {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 // tapName derives a deterministic, short tap name from the job ID.
 func tapName(jobID string) string {
 	sum := sha256.Sum256([]byte(jobID))

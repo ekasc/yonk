@@ -15,19 +15,21 @@ const (
 
 // Message types.
 const (
-	MsgHello  = "hello"
-	MsgLog    = "log"
-	MsgJob    = "job"
-	MsgStdout = "stdout"
-	MsgStderr = "stderr"
-	MsgCancel = "cancel"
-	MsgResult = "result"
+	MsgHello    = "hello"
+	MsgLog      = "log"
+	MsgJob      = "job"
+	MsgStdout   = "stdout"
+	MsgStderr   = "stderr"
+	MsgCancel   = "cancel"
+	MsgResult   = "result"
+	MsgArtifact = "artifact"
 )
 
 // Message is one newline-delimited JSON control message.
 type Message struct {
 	Type   string   `json:"type"`
 	Job    *job.Job `json:"job,omitempty"`
+	Name   string   `json:"name,omitempty"`
 	Data   []byte   `json:"data,omitempty"`
 	Result *Result  `json:"result,omitempty"`
 }

@@ -24,7 +24,7 @@ func TestFirecrackerRunStreamsOutput(t *testing.T) {
 
 	spec := testVMJob("echo")
 	var stdout strings.Builder
-	result, err := f.Run(context.Background(), spec, workspace.Workspace{Root: workRoot}, &stdout, io.Discard)
+	result, err := f.Run(context.Background(), spec, workspace.Workspace{Root: workRoot}, &stdout, io.Discard, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -46,7 +46,7 @@ func TestFirecrackerRunCancelled(t *testing.T) {
 	var result job.Result
 	var runErr error
 	go func() {
-		result, runErr = f.Run(ctx, testVMJob("sleep"), workspace.Workspace{Root: workRoot}, io.Discard, io.Discard)
+		result, runErr = f.Run(ctx, testVMJob("sleep"), workspace.Workspace{Root: workRoot}, io.Discard, io.Discard, nil)
 		close(done)
 	}()
 	time.Sleep(200 * time.Millisecond)
@@ -67,7 +67,7 @@ func TestFirecrackerRunCancelled(t *testing.T) {
 
 func TestFirecrackerRunGuestCrash(t *testing.T) {
 	f := newTestFirecracker(t)
-	_, err := f.Run(context.Background(), testVMJob("crash"), workspace.Workspace{Root: t.TempDir()}, io.Discard, io.Discard)
+	_, err := f.Run(context.Background(), testVMJob("crash"), workspace.Workspace{Root: t.TempDir()}, io.Discard, io.Discard, nil)
 	if err == nil || !strings.Contains(err.Error(), "without a result") {
 		t.Fatalf("Run() error = %v, want guest crash", err)
 	}
@@ -83,7 +83,7 @@ func TestFirecrackerKill(t *testing.T) {
 	var result job.Result
 	go func() {
 		var err error
-		result, err = f.Run(context.Background(), spec, workspace.Workspace{Root: t.TempDir()}, io.Discard, io.Discard)
+		result, err = f.Run(context.Background(), spec, workspace.Workspace{Root: t.TempDir()}, io.Discard, io.Discard, nil)
 		if err != nil {
 			t.Errorf("Run() error = %v", err)
 		}

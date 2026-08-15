@@ -12,6 +12,6 @@ import (
 // Executor executes jobs and reports the platforms it can serve.
 type Executor interface {
 	Capabilities(ctx context.Context) ([]job.ExecutorCapability, error)
-	Run(ctx context.Context, spec job.Job, work workspace.Workspace, stdout, stderr io.Writer) (job.Result, error)
+	Run(ctx context.Context, spec job.Job, work workspace.Workspace, stdout, stderr io.Writer, artifacts func(name string, data []byte) error) (job.Result, error)
 	Kill(ctx context.Context, jobID string) error
 }
