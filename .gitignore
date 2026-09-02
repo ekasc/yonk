@@ -5,3 +5,4 @@
 .pi-skill-cache/
 *.test
 coverage.out
+AGENTS.md

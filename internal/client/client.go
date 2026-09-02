@@ -27,6 +27,12 @@ type Client struct {
 	baseURL   *url.URL
 	http      *http.Client
 	userAgent string
+	authToken string
+}
+
+// SetAuthToken configures bearer token authentication.
+func (c *Client) SetAuthToken(token string) {
+	c.authToken = token
 }
 
 // RemoteError is a structured worker rejection or execution failure.
@@ -219,6 +225,9 @@ func (c *Client) request(ctx context.Context, method, path string, body io.Reade
 	}
 	request.Header.Set("Accept", "application/json, application/x-ndjson")
 	request.Header.Set("User-Agent", c.userAgent)
+	if c.authToken != "" {
+		request.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
 	return request, nil
 }
 

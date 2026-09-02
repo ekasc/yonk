@@ -13,26 +13,35 @@ import (
 // Sink serializes events to one writer, optionally flushing after each event.
 type Sink struct {
 	mu        sync.Mutex
-	enc       *json.Encoder
+	w         io.Writer
 	flush     func()
 	dataBytes int64
 }
 
 // NewSink returns a sink writing to w. flush may be nil.
 func NewSink(w io.Writer, flush func()) *Sink {
-	return &Sink{enc: json.NewEncoder(w), flush: flush}
+	return &Sink{w: w, flush: flush}
 }
 
-// Emit writes one event.
+// Emit writes one event without holding the lock across blocking I/O.
 func (s *Sink) Emit(ev job.Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.enc.Encode(ev); err != nil {
+	data, err := json.Marshal(ev)
+	if err != nil {
 		return fmt.Errorf("encode job event: %w", err)
 	}
-	s.dataBytes += int64(len(ev.Data))
-	if s.flush != nil {
-		s.flush()
+	data = append(data, '\n')
+	s.mu.Lock()
+	_, writeErr := s.w.Write(data)
+	if writeErr == nil {
+		s.dataBytes += int64(len(ev.Data))
+	}
+	flush := s.flush
+	s.mu.Unlock()
+	if writeErr != nil {
+		return fmt.Errorf("encode job event: %w", writeErr)
+	}
+	if flush != nil {
+		flush()
 	}
 	return nil
 }

@@ -93,7 +93,7 @@ func (j Job) Validate() error {
 	}
 	for _, artifact := range j.Artifacts {
 		clean := path.Clean(artifact)
-		if artifact == "" || artifact != clean || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		if artifact == "" || artifact != clean || clean == "." || clean == ".." || strings.HasPrefix(clean, "/") || strings.HasPrefix(clean, "../") {
 			return fmt.Errorf("artifact path %q must be a relative path inside the workspace", artifact)
 		}
 	}
@@ -182,7 +182,7 @@ type Failure struct {
 	Message string `json:"message"`
 }
 
-// RunRequest starts a job. Workspace data will be added in milestone 2.
+// RunRequest starts a job. Workspace is uploaded as multipart field "workspace".
 type RunRequest struct {
 	Job Job `json:"job"`
 }

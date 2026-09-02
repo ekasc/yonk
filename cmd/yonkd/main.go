@@ -46,7 +46,12 @@ func run() error {
 	maxEgressMbps := flag.Uint64("max-egress-mbps", 100, "per-job egress bandwidth ceiling in Mbit/s (0 disables the limiter)")
 	maxEgressPPS := flag.Uint64("max-egress-pps", 10000, "per-job egress packet ceiling in packets/s (0 disables the limiter)")
 	guestResolver := flag.String("guest-resolver", "1.1.1.1,9.9.9.9", "comma-separated DNS resolvers for egress jobs")
+	authToken := flag.String("auth-token", "", "bearer token for worker authentication (or YONK_TOKEN env)")
 	flag.Parse()
+
+	if *authToken == "" {
+		*authToken = os.Getenv("YONK_TOKEN")
+	}
 
 	resolvers := strings.Split(*guestResolver, ",")
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -111,6 +116,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure worker: %w", err)
 	}
+	if *authToken != "" {
+		protocolServer.SetAuthToken(*authToken)
+		logger.Info("worker authentication enabled")
+	} else if strings.HasPrefix(*listen, "0.0.0.0") || strings.HasPrefix(*listen, ":") || strings.HasPrefix(*listen, "[::") {
+		logger.Warn("worker listening on all interfaces without authentication; set --auth-token or YONK_TOKEN")
+	}
 	httpServer := worker.HTTPServer(*listen, protocolServer.Handler())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -134,7 +145,7 @@ func run() error {
 	case <-ctx.Done():
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shut down worker: %w", err)

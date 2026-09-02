@@ -97,7 +97,8 @@ func CreateArchive(ctx context.Context, root string, exclusions []string) (*Arch
 		}
 	}()
 
-	gzipWriter := gzip.NewWriter(file)
+	bufWriter := bufio.NewWriter(file)
+	gzipWriter := gzip.NewWriter(bufWriter)
 	tarWriter := tar.NewWriter(gzipWriter)
 	walkErr := filepath.WalkDir(absoluteRoot, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -181,6 +182,9 @@ func CreateArchive(ctx context.Context, root string, exclusions []string) (*Arch
 	}
 	if err := gzipWriter.Close(); err != nil {
 		return nil, fmt.Errorf("finish workspace compression: %w", err)
+	}
+	if err := bufWriter.Flush(); err != nil {
+		return nil, fmt.Errorf("flush workspace archive: %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		return nil, fmt.Errorf("sync workspace archive: %w", err)
@@ -268,7 +272,7 @@ func Extract(ctx context.Context, source io.Reader, destination string, limits L
 				_ = gzipReader.Close()
 				return stats, fmt.Errorf("create workspace directory %q: %w", cleanName, err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fs.FileMode(header.Mode).Perm())
 			if err != nil {
 				_ = gzipReader.Close()
