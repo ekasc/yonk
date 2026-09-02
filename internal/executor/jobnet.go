@@ -117,8 +117,9 @@ func yonkNftRuleset() string {
   }
   chain tap-forward {
     type filter hook forward priority filter; policy accept;
-    iifname "yk*" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 224.0.0.0/4, 240.0.0.0/4 } counter drop
+    iifname "yk*" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 224.0.0.0/4, 240.0.0.0/4, 0.0.0.0/8, 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 192.88.99.0/24 } counter drop
     iifname "yk*" meta nfproto ipv6 counter drop
+    iifname "yk*" ct state invalid counter drop
     iifname "yk*" ct state new,established counter accept
     oifname "yk*" ct state established,related counter accept
     oifname "yk*" counter drop

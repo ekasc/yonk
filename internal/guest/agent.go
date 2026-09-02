@@ -89,7 +89,7 @@ func Run(log io.Writer) error {
 
 func dialHost() (*vsock.Conn, error) {
 	var lastErr error
-	for attempt := 0; attempt < 100; attempt++ {
+	for attempt := 0; attempt < 450; attempt++ {
 		conn, err := vsock.Dial(guestproto.HostCID, guestproto.HostPort, nil)
 		if err == nil {
 			return conn, nil

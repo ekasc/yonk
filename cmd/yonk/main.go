@@ -23,14 +23,26 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "run" {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		printUsage(stdout)
+		return 0
+	}
+	if args[0] == "run" && len(args) >= 2 && (args[1] == "--help" || args[1] == "-h") {
+		printUsage(stdout)
+		return 0
+	}
+	if len(args) == 1 && args[0] == "run" {
+		printUsage(stdout)
+		return 0
+	}
+	if args[0] != "run" {
 		printUsage(stderr)
 		return 2
 	}
 	workerEndpoint, command, commandArgs, options, err := parseRunArgs(args[1:])
 	if err != nil {
 		fmt.Fprintf(stderr, "yonk: %v\n", err)
-		printUsage(stderr)
+		fmt.Fprintln(stderr, "try 'yonk run --help' for usage")
 		return 2
 	}
 
@@ -41,6 +53,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "yonk: configure worker: %v\n", err)
 		return clientFailureExitCode
+	}
+	if token := os.Getenv("YONK_TOKEN"); token != "" {
+		protocolClient.SetAuthToken(token)
+	}
+	if options.authToken != "" {
+		protocolClient.SetAuthToken(options.authToken)
 	}
 	info, err := protocolClient.WorkerInfo(ctx)
 	if err != nil {
@@ -138,11 +156,11 @@ type runOptions struct {
 	timeoutSeconds   int
 	network          string
 	artifacts        []string
+	authToken        string
 }
 
 func defaultRunOptions() runOptions {
 	return runOptions{
-		exclusions:     workspace.DefaultExclusions(),
 		cpu:            2,
 		memoryMB:       1024,
 		diskMB:         512,
@@ -155,6 +173,8 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 		return "", "", nil, runOptions{}, errors.New("run requires a worker and a command after --")
 	}
 	options = defaultRunOptions()
+	noDefault := false
+	var extraExcludes []string
 	separator := -1
 	for index := 1; index < len(args); index++ {
 		switch args[index] {
@@ -165,11 +185,10 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 			if index+1 >= len(args) || args[index+1] == "" {
 				return "", "", nil, runOptions{}, errors.New("--exclude requires a path")
 			}
-			options.exclusions = append(options.exclusions, args[index+1])
+			extraExcludes = append(extraExcludes, args[index+1])
 			index++
 		case "--no-default-excludes":
-			options.noDefaultExclude = true
-			options.exclusions = nil
+			noDefault = true
 		case "--cpu":
 			if options.cpu, err = parseRunInt(args, index, "--cpu", 1, 1024); err != nil {
 				return "", "", nil, runOptions{}, err
@@ -191,7 +210,7 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 			}
 			index++
 		case "--network":
-			if index+1 >= len(args) {
+			if index+1 >= len(args) || args[index+1] == "" {
 				return "", "", nil, runOptions{}, errors.New("--network requires a value")
 			}
 			switch args[index+1] {
@@ -207,12 +226,24 @@ func parseRunArgs(args []string) (worker, command string, commandArgs []string, 
 			}
 			options.artifacts = append(options.artifacts, args[index+1])
 			index++
+		case "--auth-token":
+			if index+1 >= len(args) || args[index+1] == "" {
+				return "", "", nil, runOptions{}, errors.New("--auth-token requires a value")
+			}
+			options.authToken = args[index+1]
+			index++
 		default:
 			return "", "", nil, runOptions{}, fmt.Errorf("unknown run option %q", args[index])
 		}
 	}
 	if separator == -1 || separator+1 >= len(args) || args[separator+1] == "" {
 		return "", "", nil, runOptions{}, errors.New("run requires a command after --")
+	}
+	options.noDefaultExclude = noDefault
+	if noDefault {
+		options.exclusions = extraExcludes
+	} else {
+		options.exclusions = append(workspace.DefaultExclusions(), extraExcludes...)
 	}
 	return args[0], args[separator+1], args[separator+2:], options, nil
 }

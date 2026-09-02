@@ -473,7 +473,15 @@ func killProcess(cmd *exec.Cmd, exited <-chan struct{}, grace time.Duration) {
 		return
 	case <-timer.C:
 		_ = cmd.Process.Kill()
-		<-exited
+		timer2 := time.NewTimer(5 * time.Second)
+		defer timer2.Stop()
+		select {
+		case <-exited:
+			return
+		case <-timer2.C:
+			slog.Warn("firecracker process did not exit after SIGKILL", "pid", cmd.Process.Pid)
+			return
+		}
 	}
 }
 
@@ -518,13 +526,21 @@ type syncBuffer struct {
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if len(p) > maxVMLogBytes {
+		p = p[len(p)-maxVMLogBytes:]
+	}
 	if b.buf.Len()+len(p) > maxVMLogBytes {
-		tail := b.buf.Bytes()
-		if len(tail) > maxVMLogBytes {
-			tail = tail[len(tail)-maxVMLogBytes:]
+		keep := maxVMLogBytes - len(p)
+		if keep < 0 {
+			keep = 0
 		}
+		tail := b.buf.Bytes()
+		if len(tail) > keep {
+			tail = tail[len(tail)-keep:]
+		}
+		tailCopy := append([]byte(nil), tail...)
 		b.buf.Reset()
-		b.buf.Write(tail)
+		b.buf.Write(tailCopy)
 	}
 	return b.buf.Write(p)
 }
@@ -545,8 +561,6 @@ func clampInt(value, min, max int) int {
 	return value
 }
 
-// workspaceImageSize computes the disk image size from the workspace bytes
-// and the job's disk request. The provider's request cap always wins.
 // workspaceImageSize computes the disk image size from the workspace bytes
 // and the job's disk request. The image honors the request (the file is
 // sparse, so only content and metadata consume host disk) so build workloads

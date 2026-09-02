@@ -2,6 +2,7 @@
 package worker
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,10 +31,17 @@ const (
 
 // Server exposes worker information and streams job execution events.
 type Server struct {
-	info     job.WorkerInfo
-	executor executor.Executor
-	logger   *slog.Logger
-	slots    chan struct{}
+	info      job.WorkerInfo
+	executor  executor.Executor
+	logger    *slog.Logger
+	slots     chan struct{}
+	authToken string
+}
+
+// SetAuthToken configures bearer token authentication. When non-empty,
+// every request must include Authorization: Bearer <token>.
+func (s *Server) SetAuthToken(token string) {
+	s.authToken = token
 }
 
 // NewServer creates a worker protocol handler.
@@ -59,7 +67,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/worker", s.handleWorkerInfo)
 	mux.HandleFunc("/v1/jobs:run", s.handleRun)
 	mux.HandleFunc("/v1/jobs/", s.handleJobAction)
-	return securityHeaders(mux)
+	h := securityHeaders(mux)
+	if s.authToken != "" {
+		h = s.authMiddleware(h)
+	}
+	return h
+}
+
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		want := "Bearer " + s.authToken
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(want)) != 1 {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleWorkerInfo(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +179,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.logger.Warn("workspace rejected", "job_id", request.Job.ID, "error", err)
-		writeError(w, http.StatusBadRequest, "workspace_upload_failure", err.Error())
+		writeError(w, http.StatusBadRequest, "workspace_upload_failure", "workspace archive is invalid or exceeds limits")
 		return
 	}
 	if workspaceStats.CompressedBytes > maxWorkspaceUploadBytes {
@@ -205,7 +228,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	cleanupErr := cleanup()
 	if cleanupErr != nil {
 		s.logger.Error("job cleanup failed", "job_id", request.Job.ID, "path", jobDirectory, "error", cleanupErr)
-		_ = sink.Emit(job.Event{Type: job.EventFailure, Failure: &job.Failure{Code: "cleanup_failure", Message: cleanupErr.Error()}})
+		_ = sink.Emit(job.Event{Type: job.EventFailure, Failure: &job.Failure{Code: "cleanup_failure", Message: "worker cleanup failed"}})
 		return
 	}
 	if err := sink.Emit(job.Event{Type: job.EventStatus, Status: "cleaned"}); err != nil {
