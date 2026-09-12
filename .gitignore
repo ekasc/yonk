@@ -1,6 +1,7 @@
 /bin/
 /yonk
 /yonkd
+/AGENTS.md
 /.pi/
 .pi-skill-cache/
 *.test

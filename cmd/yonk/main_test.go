@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseRunArgs(t *testing.T) {
 	tests := []struct {
@@ -63,6 +68,51 @@ func TestParseRunArgs(t *testing.T) {
 				t.Fatalf("options = %+v, want cpu=%d mem=%d disk=%d timeout=%d", options, test.cpu, test.memoryMB, test.diskMB, test.timeout)
 			}
 		})
+	}
+}
+
+func TestWriteArtifactRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target.txt")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "out.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeArtifact(dir, "out.txt", []byte("overwrite"), io.Discard); err == nil {
+		t.Fatal("writeArtifact() followed a symlink")
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "original" {
+		t.Fatalf("symlink target was modified: %q", content)
+	}
+}
+
+func TestWriteArtifactWritesRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeArtifact(dir, "out.txt", []byte("data"), io.Discard); err != nil {
+		t.Fatalf("writeArtifact() error = %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "data" {
+		t.Fatalf("content = %q", content)
+	}
+}
+
+func TestArtifactBaseNames(t *testing.T) {
+	names := artifactBaseNames([]string{"dist/app.js", "report.txt"})
+	if !names["app.js"] || !names["report.txt"] {
+		t.Fatalf("artifactBaseNames() = %v", names)
+	}
+	if names["other.txt"] {
+		t.Fatalf("artifactBaseNames() contains an unexpected entry")
 	}
 }
 
