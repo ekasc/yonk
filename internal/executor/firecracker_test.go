@@ -1,9 +1,12 @@
 package executor
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,6 +107,64 @@ func TestFirecrackerKill(t *testing.T) {
 	assertCleanWorkDir(t, f)
 }
 
+func TestFirecrackerRunClampsDiskToProviderCeiling(t *testing.T) {
+	f := newTestFirecracker(t)
+	f.cfg.MaxDiskMB = 64
+	var imageBytes int64
+	f.mkfs = func(_, image string, size int64) error {
+		imageBytes = size
+		return os.WriteFile(image, []byte("fake-ext4"), 0o600)
+	}
+
+	spec := testVMJob("echo")
+	spec.Resources.DiskMB = 1 << 20
+	if _, err := f.Run(context.Background(), spec, workspace.Workspace{Root: t.TempDir()}, io.Discard, io.Discard, nil); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if want := int64(64) << 20; imageBytes != want {
+		t.Fatalf("workspace image = %d bytes, want clamped %d", imageBytes, want)
+	}
+}
+
+func TestNewFirecrackerRejectsInvalidCeilings(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cases := []struct {
+		name string
+		cfg  FirecrackerConfig
+	}{
+		{name: "vcpu", cfg: FirecrackerConfig{MaxVCPU: -1}},
+		{name: "memory", cfg: FirecrackerConfig{MaxMemoryMB: minGuestMemoryMB - 1}},
+		{name: "disk", cfg: FirecrackerConfig{MaxDiskMB: minGuestDiskMB - 1}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewFirecracker(test.cfg, logger); err == nil {
+				t.Fatalf("NewFirecracker(%+v) succeeded, want ceiling error", test.cfg)
+			}
+		})
+	}
+}
+
+func TestReadGuestRejectsOversizedMessage(t *testing.T) {
+	old := maxGuestMessageBytes
+	maxGuestMessageBytes = 1024
+	defer func() { maxGuestMessageBytes = old }()
+
+	f := &Firecracker{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	host, guest := net.Pipe()
+	defer host.Close()
+	defer guest.Close()
+	go func() {
+		payload := `{"type":"stdout","data":"` + strings.Repeat("a", 4096) + `"}` + "\n"
+		_, _ = io.WriteString(guest, payload)
+	}()
+
+	_, err := f.readGuest(context.Background(), host, testVMJob("echo"), io.Discard, io.Discard, nil, job.Result{}, time.Now().UTC())
+	if !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("readGuest() error = %v, want bufio.ErrTooLong", err)
+	}
+}
+
 func newTestFirecracker(t *testing.T) *Firecracker {
 	t.Helper()
 	workDir, err := os.MkdirTemp("/tmp", "yonk-vmtest-")
@@ -118,6 +179,7 @@ func newTestFirecracker(t *testing.T) *Firecracker {
 			WorkDir:     workDir,
 			MaxVCPU:     2,
 			MaxMemoryMB: 1024,
+			MaxDiskMB:   1024,
 		},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mkfs: func(root, image string, _ int64) error {

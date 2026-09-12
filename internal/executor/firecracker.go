@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -29,7 +30,17 @@ const (
 	killGrace       = 3 * time.Second
 	maxVMLogBytes   = 64 << 10
 	guestReplyGrace = 5 * time.Second
+
+	minGuestCPUs         = 1
+	minGuestMemoryMB     = 128
+	minGuestDiskMB       = 64
+	defaultMaxDiskMB     = 8192
+	initialGuestReadSize = 64 << 10
 )
+
+// maxGuestMessageBytes bounds one newline-delimited message read from the
+// untrusted guest. It is a variable only so tests can lower it.
+var maxGuestMessageBytes = 768 << 20
 
 // FirecrackerConfig configures the Firecracker executor. All paths except
 // WorkDir are validated at startup; WorkDir must allow Unix sockets.
@@ -40,6 +51,7 @@ type FirecrackerConfig struct {
 	WorkDir        string   // per-job VM state directory
 	MaxVCPU        int      // provider ceiling per guest
 	MaxMemoryMB    int      // provider ceiling per guest (MiB)
+	MaxDiskMB      int      // provider ceiling per guest workspace disk (MiB)
 	MaxEgressMbps  uint64   // per-job egress bandwidth ceiling (0 disables)
 	MaxEgressPPS   uint64   // per-job egress packet ceiling (0 disables)
 	GuestResolvers []string // DNS resolvers for egress jobs
@@ -70,6 +82,18 @@ func NewFirecracker(cfg FirecrackerConfig, logger *slog.Logger) (*Firecracker, e
 	}
 	if cfg.MaxMemoryMB == 0 {
 		cfg.MaxMemoryMB = 4096
+	}
+	if cfg.MaxDiskMB == 0 {
+		cfg.MaxDiskMB = defaultMaxDiskMB
+	}
+	if cfg.MaxVCPU < minGuestCPUs {
+		return nil, fmt.Errorf("max vcpu must be at least %d", minGuestCPUs)
+	}
+	if cfg.MaxMemoryMB < minGuestMemoryMB {
+		return nil, fmt.Errorf("max memory must be at least %d MiB", minGuestMemoryMB)
+	}
+	if cfg.MaxDiskMB < minGuestDiskMB {
+		return nil, fmt.Errorf("max disk must be at least %d MiB", minGuestDiskMB)
 	}
 	f := &Firecracker{
 		cfg:       cfg,
@@ -159,14 +183,17 @@ func (f *Firecracker) Run(ctx context.Context, spec job.Job, work workspace.Work
 	}
 	defer func() { _ = os.RemoveAll(jobDir) }()
 
+	// Provider ceilings win over the job's request; disk in particular has no
+	// other bound, so an oversized request must be clamped before imaging.
+	vcpu := clampInt(spec.Resources.CPU, minGuestCPUs, f.cfg.MaxVCPU)
+	memoryMB := clampInt(spec.Resources.MemoryMB, minGuestMemoryMB, f.cfg.MaxMemoryMB)
+	diskMB := clampInt(spec.Resources.DiskMB, minGuestDiskMB, f.cfg.MaxDiskMB)
+
 	workspaceImage := filepath.Join(jobDir, "workspace.ext4")
-	imageBytes := workspaceImageSize(work.Stats.UncompressedBytes, int64(spec.Resources.DiskMB))
+	imageBytes := workspaceImageSize(work.Stats.UncompressedBytes, int64(diskMB))
 	if err := f.mkfs(work.Root, workspaceImage, imageBytes); err != nil {
 		return result, fmt.Errorf("prepare workspace disk: %w", err)
 	}
-
-	vcpu := clampInt(spec.Resources.CPU, 1, f.cfg.MaxVCPU)
-	memoryMB := clampInt(spec.Resources.MemoryMB, 128, f.cfg.MaxMemoryMB)
 
 	// Resource limits are created up front and always removed, so a job can
 	// never outlive its cgroup even if the VM start path fails midway.
@@ -376,10 +403,17 @@ func (f *Firecracker) acceptGuest(jobCtx context.Context, cmd *exec.Cmd, listene
 }
 
 func (f *Firecracker) readGuest(jobCtx context.Context, conn net.Conn, spec job.Job, stdout, stderr io.Writer, artifacts func(name string, data []byte) error, result job.Result, started time.Time) (job.Result, error) {
-	dec := json.NewDecoder(conn)
+	// The guest is untrusted: the job runs as root inside the VM and can drive
+	// the vsock channel. Bound each newline-delimited message so a crafted
+	// frame cannot allocate unbounded host memory in the daemon.
+	initial := initialGuestReadSize
+	if initial > maxGuestMessageBytes {
+		initial = maxGuestMessageBytes
+	}
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, initial), maxGuestMessageBytes)
 	for {
-		var msg guestproto.Message
-		if err := dec.Decode(&msg); err != nil {
+		if !scanner.Scan() {
 			if ctxErr := jobCtx.Err(); ctxErr != nil {
 				code, reason := classifyContext(ctxErr)
 				result.ExitCode = code
@@ -388,11 +422,23 @@ func (f *Firecracker) readGuest(jobCtx context.Context, conn net.Conn, spec job.
 				result.DurationMillis = result.EndedAt.Sub(started).Milliseconds()
 				return result, nil
 			}
+			err := scanner.Err()
+			if err == nil {
+				err = io.EOF
+			}
 			result.ExitCode = 137
 			result.TerminationReason = "guest_crash"
 			result.EndedAt = time.Now().UTC()
 			result.DurationMillis = result.EndedAt.Sub(started).Milliseconds()
 			return result, fmt.Errorf("guest closed the connection without a result: %w", err)
+		}
+		var msg guestproto.Message
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			result.ExitCode = 137
+			result.TerminationReason = "guest_crash"
+			result.EndedAt = time.Now().UTC()
+			result.DurationMillis = result.EndedAt.Sub(started).Milliseconds()
+			return result, fmt.Errorf("decode guest message: %w", err)
 		}
 		switch msg.Type {
 		case guestproto.MsgStdout:

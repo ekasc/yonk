@@ -23,6 +23,7 @@ func sweepOrphans(workDir string, logger *slog.Logger) {
 	orphanFCs := make([]int, 0)
 	orphanJobDirs := make(map[string]bool)
 	liveJobDirs := make(map[string]bool)
+	self := os.Getpid()
 
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -46,7 +47,7 @@ func sweepOrphans(workDir string, logger *slog.Logger) {
 		if apiSock == "" || (jobDir != workDir && !strings.HasPrefix(jobDir, workDir+"/")) {
 			continue // not one of our VMs
 		}
-		if isOrphanedProcess(pid) {
+		if isOrphanedProcess(pid, self) {
 			orphanFCs = append(orphanFCs, pid)
 			orphanJobDirs[jobDir] = true
 		} else {
@@ -133,8 +134,10 @@ func sweepOrphans(workDir string, logger *slog.Logger) {
 }
 
 // isOrphanedProcess reports whether pid is a child that was reparented to
-// init because its parent (the daemon) died.
-func isOrphanedProcess(pid int) bool {
+// init because its parent (the daemon) died. self is the sweeping daemon's
+// own PID: when the daemon is init (PID 1, e.g. in a container), its live
+// children legitimately have ppid 1 and must not be treated as orphans.
+func isOrphanedProcess(pid, self int) bool {
 	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		return true
@@ -152,5 +155,5 @@ func isOrphanedProcess(pid int) bool {
 	if err != nil {
 		return true
 	}
-	return ppid == 1
+	return ppid == 1 && ppid != self
 }

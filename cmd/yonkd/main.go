@@ -43,6 +43,7 @@ func run() error {
 	vmWorkDir := flag.String("vm-work-dir", os.TempDir(), "directory for per-job VM state")
 	maxVCPU := flag.Int("max-vcpu", 4, "maximum vCPUs per microVM")
 	maxMemoryMB := flag.Int("max-memory-mb", 4096, "maximum memory MiB per microVM")
+	maxDiskMB := flag.Int("max-disk-mb", 8192, "maximum workspace disk MiB per microVM")
 	maxEgressMbps := flag.Uint64("max-egress-mbps", 100, "per-job egress bandwidth ceiling in Mbit/s (0 disables the limiter)")
 	maxEgressPPS := flag.Uint64("max-egress-pps", 10000, "per-job egress packet ceiling in packets/s (0 disables the limiter)")
 	guestResolver := flag.String("guest-resolver", "1.1.1.1,9.9.9.9", "comma-separated DNS resolvers for egress jobs")
@@ -60,6 +61,7 @@ func run() error {
 			WorkDir:        *vmWorkDir,
 			MaxVCPU:        *maxVCPU,
 			MaxMemoryMB:    *maxMemoryMB,
+			MaxDiskMB:      *maxDiskMB,
 			MaxEgressMbps:  *maxEgressMbps,
 			MaxEgressPPS:   *maxEgressPPS,
 			GuestResolvers: resolvers,
@@ -77,6 +79,7 @@ func run() error {
 			WorkDir:        *vmWorkDir,
 			MaxVCPU:        *maxVCPU,
 			MaxMemoryMB:    *maxMemoryMB,
+			MaxDiskMB:      *maxDiskMB,
 			MaxEgressMbps:  *maxEgressMbps,
 			MaxEgressPPS:   *maxEgressPPS,
 			GuestResolvers: resolvers,
@@ -92,6 +95,9 @@ func run() error {
 	capabilities, err := exec.Capabilities(context.Background())
 	if err != nil {
 		return fmt.Errorf("read executor capabilities: %w", err)
+	}
+	if len(capabilities) == 0 {
+		return errors.New("executor reported no capabilities")
 	}
 	memoryTotal, memoryAvailable := memorySnapshot()
 	info := job.WorkerInfo{

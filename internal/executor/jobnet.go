@@ -107,8 +107,9 @@ func guestBootNetArg(sub *jobSubnet, resolvers []string) string {
 
 // yonkNftRuleset is the shared egress-only table. Jobs may reach public
 // destinations only: inbound from any job tap is dropped at INPUT (host
-// protection), private/CGNAT/reserved and IPv6 destinations are dropped at
-// FORWARD (LAN protection), and masquerade handles egress.
+// protection), private/CGNAT/reserved, benchmarking, documentation, and IPv6
+// destinations are dropped at FORWARD (LAN protection), and masquerade handles
+// egress.
 func yonkNftRuleset() string {
 	return `table inet yonk {
   chain tap-input {
@@ -117,7 +118,7 @@ func yonkNftRuleset() string {
   }
   chain tap-forward {
     type filter hook forward priority filter; policy accept;
-    iifname "yk*" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 224.0.0.0/4, 240.0.0.0/4 } counter drop
+    iifname "yk*" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4 } counter drop
     iifname "yk*" meta nfproto ipv6 counter drop
     iifname "yk*" ct state new,established counter accept
     oifname "yk*" ct state established,related counter accept

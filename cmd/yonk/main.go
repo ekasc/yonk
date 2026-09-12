@@ -98,6 +98,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Network:        network,
 		Artifacts:      options.artifacts,
 	}
+	requestedArtifacts := artifactBaseNames(options.artifacts)
 	result, err := protocolClient.Run(ctx, spec, archiveFile, func(event job.Event) error {
 		switch event.Type {
 		case job.EventStdout:
@@ -107,6 +108,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 			_, err := stderr.Write(event.Data)
 			return err
 		case job.EventArtifact:
+			if !requestedArtifacts[event.Name] {
+				return fmt.Errorf("worker returned unrequested artifact %q", event.Name)
+			}
 			return writeArtifact(workingDirectory, event.Name, event.Data, stdout)
 		default:
 			return nil
@@ -237,14 +241,34 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+// artifactBaseNames maps requested artifact paths to the base names the
+// protocol uses on the wire, so only artifacts the user asked for are accepted.
+func artifactBaseNames(paths []string) map[string]bool {
+	names := make(map[string]bool, len(paths))
+	for _, artifact := range paths {
+		names[filepath.Base(artifact)] = true
+	}
+	return names
+}
+
 // writeArtifact stores a returned artifact next to the workspace, using only
 // its base name so a hostile artifact cannot escape the working directory.
+// O_NOFOLLOW prevents an existing symlink in the working directory from
+// redirecting the write outside it.
 func writeArtifact(dir, name string, data []byte, stdout io.Writer) error {
 	if name != filepath.Base(name) {
 		return fmt.Errorf("worker returned unsafe artifact name %q", name)
 	}
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("write artifact %s: %w", name, err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write artifact %s: %w", name, err)
+	}
+	if err := file.Close(); err != nil {
 		return fmt.Errorf("write artifact %s: %w", name, err)
 	}
 	fmt.Fprintf(stdout, "artifact: %s (%d bytes)\n", name, len(data))
